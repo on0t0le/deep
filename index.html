@@ -31,8 +31,8 @@
     left: 50%;
     bottom: 10px;
     transform: translateX(-50%);
-    font-size: 11px;
-    color: #456;
+    font-size: 12px;
+    color: #7da;
     letter-spacing: 1px;
     pointer-events: none;
     user-select: none;
@@ -166,7 +166,7 @@ const ARCHETYPES = [
 /* ---------- Points of interest: blueprints / logs / wrecks / rare phenomena ----------
    Placed deterministically in the open channel at their depth, so always reachable. */
 const POIS = [
-  { id: "valve",   name: "Pressure Valve",      depth: 420,   kind: "bp", apply: u => u.hull = Math.max(u.hull, 1) },
+  { id: "valve",   name: "Pressure Valve",      depth: 250,   kind: "bp", apply: u => u.hull = Math.max(u.hull, 1) },
   { id: "oxy",     name: "Oxygen Recycler",     depth: 900,   kind: "bp", apply: u => u.oxygen = Math.max(u.oxygen, 1) },
   { id: "crystal", name: "Sonar Crystal",       depth: 1300,  kind: "bp", apply: u => u.sonar = Math.max(u.sonar, 1) },
   { id: "plating", name: "Reinforced Plating",  depth: 1400,  kind: "bp", apply: u => u.hull = Math.max(u.hull, 2) },
@@ -327,7 +327,7 @@ class ChunkManager {
 /* ---------- Input ---------- */
 class Input {
   constructor() {
-    this.keys = {}; this.pressed = {};
+    this.keys = {}; this.pressed = {}; this.clickPt = null;
     addEventListener("keydown", e => {
       if (["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.code)) e.preventDefault();
       if (!this.keys[e.code]) this.pressed[e.code] = true;
@@ -336,8 +336,15 @@ class Input {
     addEventListener("keyup", e => { this.keys[e.code] = false; });
     addEventListener("blur", () => { this.keys = {}; });
   }
+  bindClicks(canvas, scale) {
+    canvas.addEventListener("click", e => {
+      const r = canvas.getBoundingClientRect();
+      this.clickPt = { x: (e.clientX - r.left) / scale(), y: (e.clientY - r.top) / scale() };
+    });
+  }
   down(c) { return !!this.keys[c]; }
   take(c) { if (this.pressed[c]) { this.pressed[c] = false; return true; } return false; }
+  takeClick() { const p = this.clickPt; this.clickPt = null; return p; }
   any() { for (const k in this.pressed) if (this.pressed[k]) return true; return false; }
 }
 
@@ -531,6 +538,7 @@ class Game {
     this.input = new Input();
     this.renderer = new Renderer(document.getElementById("screen"));
     this.ctx = this.renderer.ctx;
+    this.input.bindClicks(this.renderer.display, () => this.renderer.scale);
     this.chunks = new ChunkManager(this.seed);
     this.sonar = new SonarSystem();
     this.audio = new AudioSystem();
@@ -571,7 +579,7 @@ class Game {
     if (this.mode === "DIVE")
       h.textContent = "WASD move · SPACE sonar · SHIFT boost · 1/2/3 lights · J journal · M mute · ESC pause · R restart";
     else if (this.mode === "BOAT")
-      h.textContent = "1 workshop · 2 journal · 3 dive · M mute · R restart";
+      h.textContent = "click a panel (or 1/2/3) · M mute · R restart";
     else h.textContent = "R restart";
   }
 
@@ -625,20 +633,38 @@ class Game {
   }
 
   /* ---------- BOAT ---------- */
-  _updateBoat(dt) {
-    const inp = this.input;
-    if (inp.take("Digit1")) {            // workshop: install all pending upgrades
+  _boatPanelRects() {
+    const w = W, h = H;
+    const pw = w * 0.26, gap = w * 0.04, total = pw * 3 + gap * 2, x0 = (w - total) / 2, py = h * 0.34, ph = h * 0.26;
+    return [0, 1, 2].map(i => ({ x: x0 + i * (pw + gap), y: py, w: pw, h: ph }));
+  }
+  _boatAction(i) {
+    if (i === 0) {                       // workshop: install all pending upgrades
       const pend = this.upgrades.pending();
       if (pend.length) {
         const names = pend.map(id => this.upgrades.apply(id)).filter(Boolean);
         this.boatMsg = "Installed: " + names.join(", ");
         this._save(); this.audio.chime();
       } else this.boatMsg = "No new blueprints to install.";
-    }
-    if (inp.take("Digit2")) this.showJournal = !this.showJournal;
-    if (inp.take("Digit3") || inp.take("Enter") || inp.take("Space")) {
+    } else if (i === 1) {
+      this.showJournal = !this.showJournal;
+    } else if (i === 2) {
       this.showJournal = false; this.boatMsg = "";
       this.mode = "DIVE"; this._resetDiveVars(); this._updateHint();
+    }
+  }
+  _updateBoat(dt) {
+    const inp = this.input;
+    if (inp.take("Digit1")) this._boatAction(0);
+    if (inp.take("Digit2")) this._boatAction(1);
+    if (inp.take("Digit3") || inp.take("Enter") || inp.take("Space")) this._boatAction(2);
+    const click = inp.takeClick();
+    if (click) {
+      const rects = this._boatPanelRects();
+      for (let i = 0; i < rects.length; i++) {
+        const r = rects[i];
+        if (click.x >= r.x && click.x <= r.x + r.w && click.y >= r.y && click.y <= r.y + r.h) this._boatAction(i);
+      }
     }
   }
 
@@ -716,8 +742,8 @@ class Game {
     // arrival at the bottom -> ending
     if (this.depth >= BOTTOM_TILE - 2) { this._beginEnding(); return; }
 
-    // surfacing ends the dive (secure discoveries)
-    if (this.depth <= 1 && this.diveMax > 20) this._dock();
+    // surfacing ends the dive once the sub visibly breaches into open air
+    if (this.py <= -30 && this.diveMax > 20) this._dock();
 
     this.saveTimer += dt;
     if (this.saveTimer > 5) { this.saveTimer = 0; this._save(); }
@@ -867,18 +893,33 @@ class Game {
 
   _renderWorld() {
     const ctx = this.ctx, depth = this.depth, water = BiomeGenerator.water(depth);
-    ctx.fillStyle = `rgb(${water[0] | 0},${water[1] | 0},${water[2] | 0})`;
-    ctx.fillRect(0, 0, W, H);
-
     const camX = this.px - W / 2, camY = this.py - H / 2;
+    const horizonY = -camY;   // screen y of world y=0 (sea surface)
+
+    if (horizonY > 0) {       // sub is above sea level: sky band visible
+      const g = ctx.createLinearGradient(0, 0, 0, horizonY);
+      g.addColorStop(0, "#bcdcec"); g.addColorStop(1, "#8fc4d8");
+      ctx.fillStyle = g; ctx.fillRect(0, 0, W, Math.min(H, horizonY));
+    }
+    ctx.fillStyle = `rgb(${water[0] | 0},${water[1] | 0},${water[2] | 0})`;
+    ctx.fillRect(0, Math.max(0, horizonY), W, H - Math.max(0, horizonY));
+
     const tx0 = Math.floor(camX / TILE), tx1 = Math.floor((camX + W) / TILE);
     const ty0 = Math.floor(camY / TILE), ty1 = Math.floor((camY + H) / TILE);
-    for (let ty = ty0; ty <= ty1; ty++)
+    for (let ty = ty0; ty <= ty1; ty++) {
+      if (ty < 0) continue;   // above sea level: open sky, nothing to draw
       for (let tx = tx0; tx <= tx1; tx++) {
         const type = this.chunks.getTile(tx, ty);
         const bri = this._brightness(tx, ty);
         this._drawTile(ctx, type, tx, ty, Math.round(tx * TILE - camX), Math.round(ty * TILE - camY), bri);
       }
+    }
+    if (horizonY > -20 && horizonY < H + 20) {   // wavy surface line
+      ctx.strokeStyle = "rgba(230,245,250,0.55)"; ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      for (let x = 0; x <= W; x += 6) ctx.lineTo(x, horizonY + Math.sin(x * 0.08 + this.t * 1.4) * 1.6);
+      ctx.stroke();
+    }
 
     // POIs
     this.chunks.forEachPOI(camX - 60, camY - 60, camX + W + 60, camY + H + 60, s => {
@@ -1203,14 +1244,15 @@ class Game {
       ["2", "JOURNAL", "your discoveries"],
       ["3", "DIVE", "descend"],
     ];
-    const pw = w * 0.26, gap = w * 0.04, total = pw * 3 + gap * 2, x0 = (w - total) / 2, py = h * 0.34, ph = h * 0.26;
+    const rects = this._boatPanelRects();
+    let py = 0, ph = 0;
     for (let i = 0; i < 3; i++) {
-      const x = x0 + i * (pw + gap);
-      dc.fillStyle = "rgba(20,40,58,0.85)"; dc.fillRect(x, py, pw, ph);
-      dc.strokeStyle = "#3a6076"; dc.lineWidth = Math.max(1, s); dc.strokeRect(x, py, pw, ph);
-      dc.fillStyle = "#9fd4e8"; dc.font = `bold ${20 * s}px "Courier New",monospace`; dc.fillText(labels[i][0], x + pw / 2, py + ph * 0.14);
-      dc.fillStyle = "#dce8f0"; dc.font = `bold ${11 * s}px "Courier New",monospace`; dc.fillText(labels[i][1], x + pw / 2, py + ph * 0.5);
-      dc.fillStyle = "#7a98a6"; dc.font = `${8 * s}px "Courier New",monospace`; dc.fillText(labels[i][2], x + pw / 2, py + ph * 0.72);
+      const x = rects[i].x * s, y = rects[i].y * s, pw = rects[i].w * s; ph = rects[i].h * s; py = y;
+      dc.fillStyle = "rgba(20,40,58,0.85)"; dc.fillRect(x, y, pw, ph);
+      dc.strokeStyle = "#3a6076"; dc.lineWidth = Math.max(1, s); dc.strokeRect(x, y, pw, ph);
+      dc.fillStyle = "#9fd4e8"; dc.font = `bold ${20 * s}px "Courier New",monospace`; dc.fillText(labels[i][0], x + pw / 2, y + ph * 0.14);
+      dc.fillStyle = "#dce8f0"; dc.font = `bold ${11 * s}px "Courier New",monospace`; dc.fillText(labels[i][1], x + pw / 2, y + ph * 0.5);
+      dc.fillStyle = "#7a98a6"; dc.font = `${8 * s}px "Courier New",monospace`; dc.fillText(labels[i][2], x + pw / 2, y + ph * 0.72);
     }
     // current upgrade status line
     const u = this.upgrades;
