@@ -143,24 +143,44 @@ class BiomeGenerator {
   }
 }
 
-/* ---------- Creature archetypes (light = hidden unless that lamp active) ---------- */
+/* ---------- Creature archetypes (light = hidden unless that lamp active) ----------
+   `zone` is a finer-grained spawn band (see creatureZone()) so new species keep
+   appearing steadily with depth instead of only at the 5 wide BIOMES boundaries. */
+function creatureZone(d) {
+  if (d < 100) return 0;
+  if (d < 600) return 1;
+  if (d < 1500) return 2;
+  if (d < 3000) return 3;
+  if (d < 5000) return 4;
+  if (d < 8000) return 5;
+  if (d < 12000) return 6;
+  return 7;
+}
 const ARCHETYPES = [
-  { name: "School of Fish",  shape: "fish",  size: 6,  biome: 0, glow: [180, 200, 210] },
-  { name: "Small Jellyfish", shape: "jelly", size: 7,  biome: 0, glow: [160, 200, 220] },
-  { name: "Sea Turtle",      shape: "ray",   size: 11, biome: 0, glow: [120, 180, 140] },
-  { name: "Giant Ray",       shape: "ray",   size: 20, biome: 1, glow: [120, 150, 190] },
-  { name: "Drifting Squid",  shape: "eel",   size: 14, biome: 1, glow: [180, 130, 170] },
-  { name: "Silver Shoal",    shape: "fish",  size: 9,  biome: 1, glow: [200, 210, 220] },
-  { name: "Crimson Drifter", shape: "jelly", size: 10, biome: 1, glow: [235, 70, 80], light: "red" },
-  { name: "Anglerfish",      shape: "fish",  size: 13, biome: 2, glow: [255, 220, 120] },
-  { name: "Glowing Jelly",   shape: "jelly", size: 12, biome: 2, glow: [120, 220, 255] },
-  { name: "Lantern Eel",     shape: "eel",   size: 22, biome: 2, glow: [120, 255, 180] },
-  { name: "Ghost Jelly",     shape: "jelly", size: 13, biome: 2, glow: [205, 255, 245], light: "uv" },
-  { name: "White Whale",     shape: "whale", size: 40, biome: 3, glow: [220, 225, 235] },
-  { name: "Pale Drifter",    shape: "jelly", size: 18, biome: 3, glow: [200, 190, 220] },
-  { name: "Phantom Ray",     shape: "ray",   size: 28, biome: 3, glow: [180, 160, 255], light: "uv" },
-  { name: "Dream Wisp",      shape: "wisp",  size: 10, biome: 4, glow: [230, 140, 255] },
-  { name: "Impossible Form", shape: "wisp",  size: 26, biome: 4, glow: [255, 120, 200] },
+  { name: "School of Fish",  shape: "fish",  size: 6,  zone: 0, glow: [180, 200, 210] },
+  { name: "Small Jellyfish", shape: "jelly", size: 7,  zone: 0, glow: [160, 200, 220] },
+  { name: "Sea Turtle",      shape: "ray",   size: 11, zone: 0, glow: [120, 180, 140] },
+  { name: "Giant Ray",       shape: "ray",   size: 20, zone: 1, glow: [120, 150, 190] },
+  { name: "Silver Shoal",    shape: "fish",  size: 9,  zone: 1, glow: [200, 210, 220] },
+  { name: "Spotted Grouper", shape: "fish",  size: 12, zone: 1, glow: [150, 180, 120] },
+  { name: "Drifting Squid",  shape: "eel",   size: 14, zone: 2, glow: [180, 130, 170] },
+  { name: "Crimson Drifter", shape: "jelly", size: 10, zone: 2, glow: [235, 70, 80], light: "red" },
+  { name: "Banded Eel",      shape: "eel",   size: 16, zone: 2, glow: [200, 160, 90] },
+  { name: "Anglerfish",      shape: "fish",  size: 13, zone: 3, glow: [255, 220, 120] },
+  { name: "Glowing Jelly",   shape: "jelly", size: 12, zone: 3, glow: [120, 220, 255] },
+  { name: "Violet Squid",    shape: "eel",   size: 18, zone: 3, glow: [170, 120, 200] },
+  { name: "Lantern Eel",     shape: "eel",   size: 22, zone: 4, glow: [120, 255, 180] },
+  { name: "Ghost Jelly",     shape: "jelly", size: 13, zone: 4, glow: [205, 255, 245], light: "uv" },
+  { name: "Abyssal Angler",  shape: "fish",  size: 15, zone: 4, glow: [255, 200, 90] },
+  { name: "White Whale",     shape: "whale", size: 40, zone: 5, glow: [220, 225, 235] },
+  { name: "Pale Drifter",    shape: "jelly", size: 18, zone: 5, glow: [200, 190, 220] },
+  { name: "Drifting Manta",  shape: "ray",   size: 32, zone: 5, glow: [140, 160, 200] },
+  { name: "Phantom Ray",     shape: "ray",   size: 28, zone: 6, glow: [180, 160, 255], light: "uv" },
+  { name: "Void Eel",        shape: "eel",   size: 26, zone: 6, glow: [120, 90, 200], light: "uv" },
+  { name: "Husk Drifter",    shape: "jelly", size: 20, zone: 6, glow: [160, 140, 160] },
+  { name: "Dream Wisp",      shape: "wisp",  size: 10, zone: 7, glow: [230, 140, 255] },
+  { name: "Impossible Form", shape: "wisp",  size: 26, zone: 7, glow: [255, 120, 200] },
+  { name: "Gravity Bloom",   shape: "wisp",  size: 18, zone: 7, glow: [255, 180, 230] },
 ];
 
 /* ---------- Points of interest: blueprints / logs / wrecks / rare phenomena ----------
@@ -176,10 +196,10 @@ const POIS = [
   { id: "alloy",   name: "Unknown Alloy",       depth: 3800,  kind: "bp", apply: u => u.hull = Math.max(u.hull, 3) },
   { id: "bacteria",name: "Bioluminescent Bacteria", depth: 8000, kind: "bp", apply: u => { if (!u.lights.includes("uv")) u.lights.push("uv"); u.oxygen = Math.max(u.oxygen, 2); } },
   { id: "core",    name: "Abyssal Core",        depth: 8500,  kind: "bp", apply: u => u.hull = Math.max(u.hull, 4) },
-  // story logs
-  { id: "log1", name: "Old Dive Log",        depth: 1600, kind: "log", text: "Day 40. The valves hold. The deep hums to me at night." },
-  { id: "log2", name: "Torn Journal Page",   depth: 4200, kind: "log", text: "We were not the first. Lights below that answer ours." },
-  { id: "log3", name: "Final Transmission",  depth: 9200, kind: "log", text: "It is beautiful down here. I am not going back." },
+  // story logs (hint nearby blueprint depths on the map/depth-strip)
+  { id: "log1", name: "Old Dive Log",        depth: 1600, kind: "log", text: "Day 40. The valves hold. The deep hums to me at night.", hints: ["rotor", "redlamp"] },
+  { id: "log2", name: "Torn Journal Page",   depth: 4200, kind: "log", text: "We were not the first. Lights below that answer ours.", hints: ["turbine", "alloy"] },
+  { id: "log3", name: "Final Transmission",  depth: 9200, kind: "log", text: "It is beautiful down here. I am not going back.", hints: ["bacteria", "core"] },
   // wreck (stage 4)
   { id: "wreck1", name: "Abandoned Submarine", depth: 5500, kind: "wreck", text: "Hull split clean. Whoever they were, they went deeper." },
   // rare phenomena
@@ -188,18 +208,41 @@ const POIS = [
   { id: "forest", name: "Crystal Forest", depth: 7000,  kind: "rare" },
   { id: "chasm",  name: "Endless Chasm",  depth: 12000, kind: "rare" },
   { id: "sun",    name: "Black Sun",      depth: 19000, kind: "rare" },
+  // narrative locations (item 8: planet sank, didn't flood — evidence of a buried civilization)
+  { id: "subway1",   name: "Subway Entrance",     depth: 180,  kind: "subway",     text: "Tile steps lead down into dark. A rusted turnstile, still upright." },
+  { id: "sign1",     name: "Street Sign",         depth: 320,  kind: "streetsign", text: "Bent green sign, half-legible. A street name nobody remembers." },
+  { id: "subway2",   name: "Flooded Platform",    depth: 520,  kind: "subway",     text: "A train still waits at the platform. Doors open. Empty." },
+  { id: "cityblock1",name: "City Block",          depth: 900,  kind: "cityblock",  text: "Rooftops in neat rows, windows dark, streets full of silt." },
+  { id: "skyscraper1",name: "Leaning Tower",      depth: 1500, kind: "skyscraper", text: "Glass long gone. The frame still reaches for a sky it can't see." },
+  { id: "bridge1",   name: "Suspension Bridge",   depth: 1900, kind: "bridge",     text: "Cables drift like kelp. Something this size, this deep, makes no sense." },
+  { id: "cityblock2",name: "Sunken Plaza",        depth: 2600, kind: "cityblock",  text: "A fountain, dry for longer than the ocean has been here." },
+  { id: "station1",  name: "Research Station Alpha", depth: 3200, kind: "station", text: "LOG 014: Crust readings keep climbing. Whatever we're near, it's not geological." },
+  { id: "skyscraper2",name: "Manhattan Spire",    depth: 3900, kind: "skyscraper", text: "How could this be 4000m below sea level? The depth doesn't make sense." },
+  { id: "station2",  name: "Research Station Beta",  depth: 6000, kind: "station", text: "LOG 029: We stopped looking for a cause. We started looking for a source." },
+  { id: "bridge2",    name: "Drowned Overpass",   depth: 6800, kind: "bridge",     text: "Cars still in their lanes. Nobody got out. Or nobody tried." },
+  { id: "upsidedown1",name: "Inverted Tower",     depth: 9500, kind: "upsidedown", text: "The building hangs from nothing, roots in open water, roof pointed down." },
+  { id: "station3",  name: "Research Station Gamma", depth: 11000, kind: "station", text: "LOG 041: Not beneath the crust. Beneath everything. It has been pulling us down for centuries." },
+  { id: "anomaly1",   name: "Gravity Anomaly",    depth: 13500, kind: "anomaly",    text: "Your sub drifts sideways for a moment, weightless, before depth reasserts itself." },
+  { id: "upsidedown2",name: "Hanging District",   depth: 15500, kind: "upsidedown", text: "An entire neighborhood, inverted, lit by something that isn't your sonar." },
+  { id: "anomaly2",   name: "The Pull",           depth: 17500, kind: "anomaly",    text: "It isn't the sea that's deep. It's the world that fell. You're close now." },
 ];
 const POI_BY_ID = {}; POIS.forEach(p => POI_BY_ID[p.id] = p);
 
 /* ---------- Story beats (fire once at depth, persisted) ---------- */
 const STORY_BEATS = [
   { id: "s1", depth: 30,    line: "The surface fades. Sunlight on coral." },
-  { id: "s2", depth: 250,   line: "Blue deepens. Larger shapes drift past." },
-  { id: "s3", depth: 1200,  line: "Darkness now. Only your light, and theirs." },
-  { id: "s4", depth: 4500,  line: "Ruins. Someone built here, long ago." },
-  { id: "s5", depth: 10500, line: "Beyond. The water no longer obeys." },
-  { id: "s6", depth: 18000, line: "Something below. The final descent." },
+  { id: "s2", depth: 180,   line: "Tile and rust below. The world wasn't always water." },
+  { id: "s3", depth: 1200,  line: "Whole streets down here. Windows dark, doors open." },
+  { id: "s4", depth: 4000,  line: "How could a city be this deep? The depth doesn't make sense." },
+  { id: "s5", depth: 6500,  line: "Old logs, corrupted. They stopped asking why, and started asking what." },
+  { id: "s6", depth: 10500, line: "Beyond. The water no longer obeys." },
+  { id: "s7", depth: 14000, line: "Buildings hang upside down, rooted in nothing." },
+  { id: "s8", depth: 18000, line: "Something below. The final descent." },
 ];
+
+/* ---------- Narrative stages (UI flag only, depth-gated forward-only) ---------- */
+const STAGES = ["surface", "first_discoveries", "middle_game", "deeper", "strange_regions", "final_reveal"];
+const STAGE_DEPTHS = [0, 100, 700, 2000, 5000, 10000];
 
 /* ---------- Terrain + chunks ---------- */
 class TerrainGenerator {
@@ -268,11 +311,11 @@ class ChunkManager {
     const creatures = [];
     const rng = mulberry32(hashSeed(this.seed, cx, cy));
     const depth = Math.max(0, baseTy + CHUNK / 2);
-    const biome = BiomeGenerator.index(depth);
-    const want = depth < 100 ? 3 : depth < 1000 ? 2 : depth < 4000 ? 2 : 1;
+    const zone = creatureZone(depth);
+    const want = 2 + (zone === 0 ? 1 : 0);
     for (let i = 0; i < want; i++) {
-      if (rng() > 0.55) continue;
-      const pool = ARCHETYPES.filter(a => Math.abs(a.biome - biome) <= 1);
+      if (rng() > 0.7) continue;
+      const pool = ARCHETYPES.filter(a => Math.abs(a.zone - zone) <= 1);
       const arch = pool[Math.floor(rng() * pool.length)] || ARCHETYPES[0];
       const lx = Math.floor(rng() * CHUNK), ly = Math.floor(rng() * CHUNK);
       if (baseTy + ly < 0) continue;
@@ -415,6 +458,29 @@ class UpgradeSystem {
   }
 }
 
+/* ---------- XP (passive perks from exploration, separate from blueprints) ---------- */
+class XPSystem {
+  constructor(s) {
+    s = s || {};
+    this.xp = s.xp || 0;
+    this.level = s.level || 0;
+  }
+  static thresh(level) { return 50 + level * 75; }
+  add(amount) {
+    this.xp += amount;
+    let leveled = false;
+    while (this.xp >= XPSystem.thresh(this.level)) {
+      this.xp -= XPSystem.thresh(this.level);
+      this.level++; leveled = true;
+    }
+    return leveled;
+  }
+  oxygenMult() { return 1 + Math.min(0.3, this.level * 0.02); }
+  lightMult() { return 1 + Math.min(0.25, Math.floor(this.level / 2) * 0.03); }
+  sonarFadeMult() { return Math.max(0.7, 1 - this.level * 0.015); }
+  serialize() { return { xp: this.xp, level: this.level }; }
+}
+
 /* ---------- Audio (procedural WebAudio, no assets) ---------- */
 class AudioSystem {
   constructor() { this.ctx = null; this.muted = false; this.started = false; }
@@ -535,6 +601,10 @@ class Game {
     this.story = new Set((s && s.story) || []);
     this.ended = !!(s && s.ending);
     this.upgrades = new UpgradeSystem(s && s.upgrades);
+    this.xp = new XPSystem(s && s.xp);
+    this.hintedDepths = new Set((s && s.hintedDepths) || []);
+    this.visitedChunks = new Set((s && s.visited) || []);
+    this.storyStage = (s && s.stage) || 0;
 
     this.input = new Input();
     this.renderer = new Renderer(document.getElementById("screen"));
@@ -549,6 +619,7 @@ class Game {
     this.popups = [];               // {name, sub, life, rare}
     this.story_lines = [];          // narrative beats {line, life}
     this.reading = null;            // {title, text, t}
+    this.showJournal = false; this.journalTab = "log"; this.showWorkshop = false;
     this.light = this.upgrades.lights[0] || "blue";
     this.t = 0; this.saveTimer = 0;
 
@@ -578,30 +649,41 @@ class Game {
   _updateHint() {
     const h = document.getElementById("hint");
     if (this.mode === "DIVE")
-      h.textContent = "WASD move · SPACE sonar · SHIFT boost · 1/2/3 lights · J journal · M mute · ESC pause · R restart";
+      h.textContent = "WASD move · SPACE sonar · SHIFT boost · 1/2/3 lights · J journal (TAB map) · M mute · ESC pause · R restart";
     else if (this.mode === "BOAT")
-      h.textContent = "click a panel (or 1/2/3) · M mute · R restart";
+      h.textContent = "click WORKSHOP (or W) to upgrade · SPACE to dive · M mute · R restart";
     else h.textContent = "R restart";
   }
 
   /* ---------- discovery ---------- */
-  discover(name, rare, sub) {
+  _gainXP(amount) {
+    if (this.xp.add(amount)) {
+      this.popups.push({ name: "LEVEL UP", sub: "Lv " + this.xp.level + " — exploration perks improved", life: 3.4, rare: true });
+      this.audio.chime();
+    }
+  }
+  discover(name, rare, sub, xpAmount) {
     if (this.secured.has(name) || this.provisional.has(name)) return;
     this.provisional.add(name);
     this.popups.push({ name, sub: sub || (rare ? "Rare Discovery" : "Discovered"), life: 3.4, rare: !!rare });
     rare ? this.audio.rare() : this.audio.chime();
+    this._gainXP(xpAmount != null ? xpAmount : (rare ? 40 : 10));
   }
   discoverPOI(s) {
     const p = s.poi;
     if (this.secured.has(p.name) || this.provisional.has(p.name)) return;
+    if (p.hints) for (const id of p.hints) this.hintedDepths.add(id);
     if (p.kind === "bp") {
       this.provUnlocks.add(p.id);
-      this.discover(p.name, false, "Blueprint recovered");
+      this.discover(p.name, false, "Blueprint recovered", 25);
     } else if (p.kind === "log" || p.kind === "wreck") {
-      this.discover(p.name, false, "Logged");
+      this.discover(p.name, false, "Logged", 15);
       this.reading = { title: p.name, text: p.text, t: 5 };
-    } else { // rare phenomenon
+    } else if (p.kind === "rare") {
       this.discover(p.name, true);
+    } else { // new location kinds (item 8): subway/streetsign/cityblock/skyscraper/bridge/station/upsidedown/anomaly
+      this.discover(p.name, false, "Discovered", 20);
+      if (p.text) this.reading = { title: p.name, text: p.text, t: 5 };
     }
   }
 
@@ -634,38 +716,47 @@ class Game {
   }
 
   /* ---------- BOAT ---------- */
-  _boatPanelRects() {
-    const w = W, h = H;
-    const pw = w * 0.26, gap = w * 0.04, total = pw * 3 + gap * 2, x0 = (w - total) / 2, py = h * 0.34, ph = h * 0.26;
-    return [0, 1, 2].map(i => ({ x: x0 + i * (pw + gap), y: py, w: pw, h: ph }));
+  _workshopButtonRect() {
+    return { x: W * 0.5 - 36, y: H * 0.16, w: 72, h: 16 };
   }
-  _boatAction(i) {
-    if (i === 0) {                       // workshop: install all pending upgrades
-      const pend = this.upgrades.pending();
-      if (pend.length) {
-        const names = pend.map(id => this.upgrades.apply(id)).filter(Boolean);
-        this.boatMsg = "Installed: " + names.join(", ");
-        this._save(); this.audio.chime();
-      } else this.boatMsg = "No new blueprints to install.";
-    } else if (i === 1) {
-      this.showJournal = !this.showJournal;
-    } else if (i === 2) {
-      this.showJournal = false; this.boatMsg = "";
-      this.mode = "DIVE"; this._resetDiveVars(); this._updateHint();
-    }
+  _workshopRows() {
+    const pend = this.upgrades.pending();
+    const x = W * 0.18, w = W * 0.64, rowH = 14, y0 = H * 0.28;
+    return pend.map((id, i) => ({ id, x, y: y0 + i * rowH, w, h: rowH - 2 }));
+  }
+  _diveBoatRect() {
+    return { x: W / 2 - 50, y: H * 0.62 - 30, w: 100, h: 50 };
+  }
+  _installOne(id) {
+    const name = this.upgrades.apply(id);
+    if (name) { this.boatMsg = "Installed: " + name; this._save(); this.audio.chime(); }
+  }
+  _diveNow() {
+    this.showWorkshop = false; this.boatMsg = "";
+    this.mode = "DIVE"; this._resetDiveVars(); this._updateHint();
   }
   _updateBoat(dt) {
     const inp = this.input;
-    if (inp.take("Digit1")) this._boatAction(0);
-    if (inp.take("Digit2")) this._boatAction(1);
-    if (inp.take("Digit3") || inp.take("Enter") || inp.take("Space")) this._boatAction(2);
+    if (this.showWorkshop) {
+      if (inp.take("Escape")) { this.showWorkshop = false; return; }
+      const click = inp.takeClick();
+      if (click) {
+        let hit = false;
+        for (const r of this._workshopRows())
+          if (click.x >= r.x && click.x <= r.x + r.w && click.y >= r.y && click.y <= r.y + r.h) { this._installOne(r.id); hit = true; }
+        const bw = { x: W * 0.14, y: H * 0.22, w: W * 0.72, h: H * 0.58 };
+        if (!hit && !(click.x >= bw.x && click.x <= bw.x + bw.w && click.y >= bw.y && click.y <= bw.y + bw.h)) this.showWorkshop = false;
+      }
+      return;
+    }
+    if (inp.take("Enter") || inp.take("Space")) { this._diveNow(); return; }
+    if (inp.take("KeyW")) { this.showWorkshop = true; return; }
     const click = inp.takeClick();
     if (click) {
-      const rects = this._boatPanelRects();
-      for (let i = 0; i < rects.length; i++) {
-        const r = rects[i];
-        if (click.x >= r.x && click.x <= r.x + r.w && click.y >= r.y && click.y <= r.y + r.h) this._boatAction(i);
-      }
+      const wr = this._workshopButtonRect();
+      if (click.x >= wr.x && click.x <= wr.x + wr.w && click.y >= wr.y && click.y <= wr.y + wr.h) { this.showWorkshop = true; return; }
+      const dr = this._diveBoatRect();
+      if (click.x >= dr.x && click.x <= dr.x + dr.w && click.y >= dr.y && click.y <= dr.y + dr.h) this._diveNow();
     }
   }
 
@@ -674,7 +765,8 @@ class Game {
     const inp = this.input;
     if (inp.take("Escape")) { this.paused = !this.paused; }
     if (inp.take("KeyJ")) this.showJournal = !this.showJournal;
-    if (this.paused || this.showJournal) { this.sonar.update(0, this.upgrades.sonarFade()); return; }
+    if (inp.take("Tab") && this.showJournal) this.journalTab = this.journalTab === "map" ? "log" : "map";
+    if (this.paused || this.showJournal) { this.sonar.update(0, this.upgrades.sonarFade() * this.xp.sonarFadeMult()); return; }
 
     // light selection
     if (inp.take("Digit1")) this.light = "blue";
@@ -715,11 +807,17 @@ class Game {
 
     // sonar
     if (inp.take("Space")) { if (this.sonar.ping(this.px, this.py, this.upgrades.sonarRange())) this.audio.ping(); }
-    this.sonar.update(dt, this.upgrades.sonarFade());
+    this.sonar.update(dt, this.upgrades.sonarFade() * this.xp.sonarFadeMult());
 
-    // oxygen
+    // oxygen — drain scales with fraction of *this hull's* crush depth, so every
+    // tier gets a comparable danger-zone window instead of absolute depth always
+    // outpacing oxygen at high tiers and never mattering at tier 0.
     if (this.depth < 30) this.oxygen = Math.min(1, this.oxygen + dt * 0.5);
-    else this.oxygen = Math.max(0, this.oxygen - dt * (0.012 + this.depth * 0.000004) / this.upgrades.oxygenCap());
+    else {
+      const depthFrac = clamp(this.depth / this.upgrades.crushDepth(), 0, 1.6);
+      const drainBase = 0.012 + depthFrac * 0.010;
+      this.oxygen = Math.max(0, this.oxygen - dt * drainBase / (this.upgrades.oxygenCap() * this.xp.oxygenMult()));
+    }
     if (this.oxygen <= 0.0001) this.vy -= 40 * dt;   // gentle nudge up
 
     // pressure / crush
@@ -734,6 +832,8 @@ class Game {
     this.audio.setDepth(this.depth);
     if (this.depth > this.maxDepth) this.maxDepth = this.depth;
     if (this.depth > this.diveMax) this.diveMax = this.depth;
+    this.visitedChunks.add(Math.floor(this.px / CHUNK_PX) + "," + Math.floor(this.py / CHUNK_PX));
+    while (this.storyStage < STAGES.length - 1 && this.depth >= STAGE_DEPTHS[this.storyStage + 1]) this.storyStage++;
 
     this._storyBeats();
     this._updateCreatures(dt);
@@ -783,6 +883,8 @@ class Game {
     this.popups = []; this.story_lines = []; this.reading = null;
     this.ended = false; this.endDone = false; this.endingT = 0; this.implodeT = 0;
     this.upgrades = new UpgradeSystem(null);
+    this.xp = new XPSystem(null);
+    this.hintedDepths = new Set(); this.visitedChunks = new Set(); this.storyStage = 0;
     this.light = this.upgrades.lights[0] || "blue";
     this.chunks = new ChunkManager(this.seed);
     this.audio.setThruster(false);
@@ -819,7 +921,7 @@ class Game {
   _updateEnding(dt) {
     this.endingT += dt;
     if (this.endDone) { if (this.input.any()) { this.mode = "BOAT"; this._updateHint(); } return; }
-    if (this.endingT > 16) this.endDone = true;
+    if (this.endingT > 32) this.endDone = true;
   }
 
   _save() {
@@ -827,6 +929,8 @@ class Game {
       worldSeed: this.seed, maxDepth: this.maxDepth,
       discoveries: [...this.secured], story: [...this.story],
       upgrades: this.upgrades.serialize(), ending: this.ended,
+      xp: this.xp.serialize(), hintedDepths: [...this.hintedDepths],
+      visited: [...this.visitedChunks], stage: this.storyStage,
     });
   }
 
@@ -834,7 +938,7 @@ class Game {
     const cx = (tx + 0.5) * TILE, cy = (ty + 0.5) * TILE;
     const dx = cx - this.px, dy = cy - this.py;
     const d = Math.sqrt(dx * dx + dy * dy);
-    const lampR = 75 + (this.light === "uv" ? 20 : 0);
+    const lampR = (75 + (this.light === "uv" ? 20 : 0)) * this.xp.lightMult();
     const lamp = clamp(1 - d / lampR, 0, 1) * 0.9;
     const amb = BiomeGenerator.ambient(this.depth, this.t);
     const rev = this.sonar.at(tx, ty) * 0.95;
@@ -1015,6 +1119,39 @@ class Game {
       ctx.beginPath(); ctx.ellipse(0, 0, 22, 9, 0.2, 0, Math.PI * 2); ctx.fill();
       ctx.fillStyle = this._shade([40, 44, 52], bri); ctx.fillRect(-2, -10, 14, 8); // broken open
       ctx.fillStyle = "rgba(20,24,30,0.9)"; ctx.fillRect(2, -3, 8, 5);
+    } else if (poi.kind === "subway") {
+      ctx.fillStyle = this._shade([60, 64, 70], bri); ctx.fillRect(-14, -2, 28, 14);
+      ctx.fillStyle = this._shade([30, 32, 38], bri); ctx.fillRect(-10, -8, 8, 8); ctx.fillRect(2, -8, 8, 8);
+      ctx.fillStyle = "rgba(140,200,255,0.25)"; ctx.fillRect(-10, -8, 8, 8); ctx.fillRect(2, -8, 8, 8);
+    } else if (poi.kind === "streetsign") {
+      ctx.fillStyle = this._shade([70, 74, 60], bri); ctx.fillRect(-1, -22, 2, 22);
+      ctx.fillStyle = this._shade([60, 110, 70], bri); ctx.fillRect(-12, -22, 24, 7);
+    } else if (poi.kind === "cityblock") {
+      for (let i = -2; i <= 2; i++) {
+        const h = 14 + ((i * 13 + 26) % 16);
+        ctx.fillStyle = this._shade([50 + i * 4, 54, 62], bri); ctx.fillRect(i * 10 - 4, -h, 8, h);
+      }
+    } else if (poi.kind === "skyscraper") {
+      const h = 70;
+      ctx.fillStyle = this._shade([45, 48, 58], bri); ctx.fillRect(-10, -h, 20, h);
+      for (let r = 0; r < 6; r++) ctx.fillStyle = `rgba(150,210,255,${0.08 + 0.05 * ((r * 3) % 3)})`, ctx.fillRect(-7, -h + 6 + r * 11, 14, 5);
+    } else if (poi.kind === "bridge") {
+      ctx.fillStyle = this._shade([60, 64, 70], bri); ctx.fillRect(-40, -2, 80, 4);
+      for (let i = -3; i <= 3; i++) { ctx.strokeStyle = this._shade([90, 94, 100], bri); ctx.beginPath(); ctx.moveTo(i * 12, -2); ctx.lineTo(0, -26); ctx.stroke(); }
+    } else if (poi.kind === "station") {
+      ctx.fillStyle = this._shade([70, 78, 90], bri); ctx.fillRect(-16, -12, 32, 14);
+      ctx.fillStyle = `rgba(255,200,90,${0.3 + Math.sin(this.t * 2) * 0.2})`; ctx.fillRect(-12, -8, 8, 6);
+    } else if (poi.kind === "upsidedown") {
+      ctx.save(); ctx.scale(1, -1);
+      const h = 60;
+      ctx.fillStyle = this._shade([55, 50, 65], bri); ctx.fillRect(-9, -h, 18, h);
+      ctx.fillStyle = "rgba(180,140,255,0.18)"; ctx.fillRect(-9, -h, 18, h);
+      ctx.restore();
+    } else if (poi.kind === "anomaly") {
+      const r = 20 + Math.sin(this.t * 1.5) * 4;
+      const grad = ctx.createRadialGradient(0, 0, 2, 0, 0, r);
+      grad.addColorStop(0, "rgba(255,255,255,0.5)"); grad.addColorStop(1, "rgba(160,120,255,0)");
+      ctx.fillStyle = grad; ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill();
     } else { // rare phenomenon — distinct per id
       this._drawPhenomenon(ctx, poi.id, bri);
     }
@@ -1118,6 +1255,12 @@ class Game {
       dc.beginPath(); dc.arc(bx + 3 * s, by + 3 * s, 3 * s, 0, Math.PI * 2);
       dc.strokeStyle = `rgba(${critical ? "255,120,120" : "180,230,240"},${a})`; dc.lineWidth = Math.max(1, s); dc.stroke();
     }
+    // XP bar (thin, beneath oxygen bubbles)
+    const xpFrac = clamp(this.xp.xp / XPSystem.thresh(this.xp.level), 0, 1);
+    dc.fillStyle = "rgba(255,255,255,0.12)"; dc.fillRect(5 * s, 12 * s, 40 * s, 2 * s);
+    dc.fillStyle = "rgba(230,200,255,0.7)"; dc.fillRect(5 * s, 12 * s, 40 * s * xpFrac, 2 * s);
+    dc.fillStyle = "rgba(200,180,220,0.6)"; dc.font = `${6 * s}px "Courier New",monospace`;
+    dc.fillText("Lv" + this.xp.level, 47 * s, 11 * s);
     // hull + light indicator (top-right small)
     dc.textAlign = "right"; dc.font = `${8 * s}px "Courier New",monospace`;
     dc.fillStyle = this.depth > this.upgrades.crushDepth() ? "#ff7a7a" : "#789";
@@ -1126,6 +1269,17 @@ class Game {
       dc.fillStyle = `rgba(255,90,90,${0.6 + Math.sin(this.t * 6) * 0.4})`;
       dc.fillText("WARNING: CRUSH DEPTH", w - 5 * s, 16 * s);
     }
+    // depth strip — thin vertical gauge, left edge: current pos, max reached, hinted blueprint depths
+    const stripX = 4 * s, stripTop = h * 0.22, stripBot = h * 0.78, stripH = stripBot - stripTop;
+    dc.fillStyle = "rgba(255,255,255,0.10)"; dc.fillRect(stripX, stripTop, 2 * s, stripH);
+    const df = d => stripTop + clamp(d / BOTTOM_TILE, 0, 1) * stripH;
+    dc.fillStyle = "rgba(180,210,230,0.5)"; dc.fillRect(stripX - 1 * s, df(this.maxDepth), 4 * s, 1 * s);
+    for (const id of this.hintedDepths) {
+      const p = POI_BY_ID[id]; if (!p) continue;
+      dc.fillStyle = "rgba(255,217,138,0.7)"; dc.fillRect(stripX - 2 * s, df(p.depth), 6 * s, 1 * s);
+    }
+    dc.fillStyle = "#bfe8f0"; dc.fillRect(stripX - 2 * s, df(this.depth), 6 * s, 1.5 * s);
+
     if (this.currentBlocked) {
       dc.textAlign = "center"; dc.fillStyle = "#bcd"; dc.font = `${9 * s}px "Courier New",monospace`;
       dc.fillText("Strong current — stronger propeller needed", w / 2, h * 0.18);
@@ -1166,6 +1320,7 @@ class Game {
 
   _drawJournal(dc, w, h, s) {
     dc.fillStyle = "rgba(4,8,16,0.88)"; dc.fillRect(0, 0, w, h);
+    if (this.journalTab === "map") { this._drawJournalMap(dc, w, h, s); return; }
     dc.textAlign = "center"; dc.fillStyle = "#bfe8f0"; dc.font = `bold ${14 * s}px "Courier New",monospace`;
     dc.fillText("JOURNAL", w / 2, h * 0.07);
     dc.font = `${9 * s}px "Courier New",monospace`; dc.textAlign = "left";
@@ -1181,7 +1336,35 @@ class Game {
     dc.fillStyle = "#456";
     for (let i = 0; i < 3; i++) { dc.fillText("???", colX + col * w * 0.34, y); y += 15 * s; }
     dc.textAlign = "center"; dc.fillStyle = "#678"; dc.font = `${8 * s}px "Courier New",monospace`;
-    dc.fillText("~ pending   ✓ secured at surface      press J to close", w / 2, h * 0.92);
+    dc.fillText("~ pending   ✓ secured at surface      TAB for map      press J to close", w / 2, h * 0.92);
+  }
+  _drawJournalMap(dc, w, h, s) {
+    dc.textAlign = "center"; dc.fillStyle = "#bfe8f0"; dc.font = `bold ${14 * s}px "Courier New",monospace`;
+    dc.fillText("CHARTED WATERS", w / 2, h * 0.06);
+    const top = h * 0.12, bot = h * 0.86, bandM = 200, bands = Math.ceil(BOTTOM_TILE / bandM);
+    const colX = w * 0.5, barW = w * 0.5, bh = (bot - top) / bands;
+    for (let b = 0; b < bands; b++) {
+      const d0 = b * bandM, d1 = d0 + bandM;
+      const cy0 = Math.floor(d0 / CHUNK), cy1 = Math.floor(d1 / CHUNK);
+      let seen = false;
+      for (const key of this.visitedChunks) { const cy = +key.split(",")[1]; if (cy >= cy0 && cy <= cy1) { seen = true; break; } }
+      const y = top + b * bh;
+      dc.fillStyle = seen ? "rgba(120,180,210,0.55)" : "rgba(40,50,60,0.4)";
+      dc.fillRect(colX - barW / 2, y, barW, Math.max(1, bh - 0.3));
+      if (seen) {
+        for (const p of POIS) {
+          if (p.depth >= d0 && p.depth < d1 && (this.secured.has(p.name) || this.provisional.has(p.name))) {
+            dc.fillStyle = "#ffd98a"; dc.fillRect(colX - barW / 2 - 4 * s, y, 3 * s, Math.max(1, bh - 0.3));
+          } else if (p.depth >= d0 && p.depth < d1 && this.hintedDepths.has(p.id)) {
+            dc.fillStyle = "rgba(255,217,138,0.4)"; dc.fillRect(colX - barW / 2 - 4 * s, y, 3 * s, Math.max(1, bh - 0.3));
+          }
+        }
+      }
+    }
+    dc.fillStyle = "#e8d68a"; dc.font = `bold ${9 * s}px "Courier New",monospace`;
+    dc.fillText(this.maxDepth + "m max", colX, top - 4 * s);
+    dc.textAlign = "center"; dc.fillStyle = "#678"; dc.font = `${8 * s}px "Courier New",monospace`;
+    dc.fillText("lit = visited   gold = found   faint gold = hinted      TAB for log      press J to close", w / 2, h * 0.92);
   }
   _drawPause(dc, w, h, s) {
     dc.fillStyle = "rgba(0,0,0,0.7)"; dc.fillRect(0, 0, w, h);
@@ -1237,32 +1420,53 @@ class Game {
     dc.fillStyle = "#dce8f0"; dc.font = `bold ${15 * s}px "Courier New",monospace`;
     dc.fillText("ENDLESS DESCENT", w / 2, h * 0.06);
     dc.font = `${9 * s}px "Courier New",monospace`; dc.fillStyle = "#8aa6b4";
-    dc.fillText("max depth " + this.maxDepth + "m", w / 2, h * 0.14);
+    dc.fillText("max depth " + this.maxDepth + "m", w / 2, h * 0.105);
 
-    // three station panels
-    const labels = [
-      ["1", "WORKSHOP", this.upgrades.pending().length ? this.upgrades.pending().length + " blueprint(s) ready" : "all installed"],
-      ["2", "JOURNAL", "your discoveries"],
-      ["3", "DIVE", "descend"],
-    ];
-    const rects = this._boatPanelRects();
-    let py = 0, ph = 0;
-    for (let i = 0; i < 3; i++) {
-      const x = rects[i].x * s, y = rects[i].y * s, pw = rects[i].w * s; ph = rects[i].h * s; py = y;
-      dc.fillStyle = "rgba(20,40,58,0.85)"; dc.fillRect(x, y, pw, ph);
-      dc.strokeStyle = "#3a6076"; dc.lineWidth = Math.max(1, s); dc.strokeRect(x, y, pw, ph);
-      dc.fillStyle = "#9fd4e8"; dc.font = `bold ${20 * s}px "Courier New",monospace`; dc.fillText(labels[i][0], x + pw / 2, y + ph * 0.14);
-      dc.fillStyle = "#dce8f0"; dc.font = `bold ${11 * s}px "Courier New",monospace`; dc.fillText(labels[i][1], x + pw / 2, y + ph * 0.5);
-      dc.fillStyle = "#7a98a6"; dc.font = `${8 * s}px "Courier New",monospace`; dc.fillText(labels[i][2], x + pw / 2, y + ph * 0.72);
-    }
+    // single workshop button — dimmed/absent while diving (this is boat-only draw), lit here
+    const pend = this.upgrades.pending();
+    const wr = this._workshopButtonRect();
+    dc.fillStyle = pend.length ? "rgba(40,80,60,0.85)" : "rgba(30,40,50,0.6)";
+    dc.fillRect(wr.x * s, wr.y * s, wr.w * s, wr.h * s);
+    dc.strokeStyle = pend.length ? "#5ac88a" : "#3a5060"; dc.lineWidth = Math.max(1, s);
+    dc.strokeRect(wr.x * s, wr.y * s, wr.w * s, wr.h * s);
+    dc.fillStyle = pend.length ? "#cfe8a0" : "#7a98a6"; dc.font = `bold ${9 * s}px "Courier New",monospace`;
+    dc.fillText("WORKSHOP" + (pend.length ? " (" + pend.length + ")" : ""), wr.x * s + wr.w * s / 2, wr.y * s + 3 * s);
+
     // current upgrade status line
     const u = this.upgrades;
     dc.fillStyle = "#8aa6b4"; dc.font = `${8 * s}px "Courier New",monospace`;
-    dc.fillText(`Hull ${HULL_NAMES[u.hull]} (${u.crushDepth()}m) · O2 lv${u.oxygen} · Sonar lv${u.sonar} · Prop lv${u.propeller} · Lights ${u.lights.join("/")}`, w / 2, py + ph + 14 * s);
-    if (this.boatMsg) { dc.fillStyle = "#cfe8a0"; dc.font = `${9 * s}px "Courier New",monospace`; dc.fillText(this.boatMsg, w / 2, py + ph + 30 * s); }
+    dc.fillText(`Hull ${HULL_NAMES[u.hull]} (${u.crushDepth()}m) · O2 lv${u.oxygen} · Sonar lv${u.sonar} · Prop lv${u.propeller} · Lights ${u.lights.join("/")}`, w / 2, h * 0.94);
+    if (this.boatMsg) { dc.fillStyle = "#cfe8a0"; dc.font = `${9 * s}px "Courier New",monospace`; dc.fillText(this.boatMsg, w / 2, h * 0.88); }
 
-    if (this.showJournal) this._drawJournal(dc, w, h, s);
+    // dive prompt near the boat sprite
+    if (!this.showWorkshop) {
+      dc.fillStyle = `rgba(220,235,245,${0.6 + Math.sin(this.t * 2) * 0.2})`; dc.font = `${9 * s}px "Courier New",monospace`;
+      dc.fillText("[SPACE] dive", w / 2, h * 0.74);
+    }
+
+    if (this.showWorkshop) this._drawWorkshop(dc, w, h, s);
     dc.restore();
+  }
+  _drawWorkshop(dc, w, h, s) {
+    const bw = { x: W * 0.14, y: H * 0.22, w: W * 0.72, h: H * 0.58 };
+    dc.fillStyle = "rgba(6,14,22,0.92)"; dc.fillRect(bw.x * s, bw.y * s, bw.w * s, bw.h * s);
+    dc.strokeStyle = "#3a6076"; dc.lineWidth = Math.max(1, s); dc.strokeRect(bw.x * s, bw.y * s, bw.w * s, bw.h * s);
+    dc.textAlign = "center"; dc.fillStyle = "#9fd4e8"; dc.font = `bold ${11 * s}px "Courier New",monospace`;
+    dc.fillText("WORKSHOP — pick one to install", w / 2, bw.y * s + 5 * s);
+    const rows = this._workshopRows();
+    dc.textAlign = "left"; dc.font = `${9 * s}px "Courier New",monospace`;
+    if (!rows.length) {
+      dc.textAlign = "center"; dc.fillStyle = "#7a98a6";
+      dc.fillText("No new blueprints to install.", w / 2, (bw.y + bw.h / 2) * s);
+    } else {
+      for (const r of rows) {
+        const p = POI_BY_ID[r.id];
+        dc.fillStyle = "rgba(40,70,55,0.6)"; dc.fillRect(r.x * s, r.y * s, r.w * s, r.h * s);
+        dc.fillStyle = "#cfe8a0"; dc.fillText(p ? p.name : r.id, r.x * s + 4 * s, r.y * s + 2 * s);
+      }
+    }
+    dc.textAlign = "center"; dc.fillStyle = "#678"; dc.font = `${8 * s}px "Courier New",monospace`;
+    dc.fillText("click an item to install it      ESC or click outside to close", w / 2, (bw.y + bw.h - 8) * s);
   }
 
   /* ---------- IMPLODE / ENDING render ---------- */
@@ -1283,8 +1487,15 @@ class Game {
     dc.fillStyle = `rgba(2,4,10,${fade})`; dc.fillRect(0, 0, w, h);
     const lines = [
       "The ocean has a bottom.",
-      "No boss. No answer.",
-      "Only arrival.",
+      "",
+      "The sea didn't rise.",
+      "The planet sank.",
+      "",
+      "Something beneath is pulling it all down.",
+      "Continents. Cities. Mountains. Everything.",
+      "It has been happening for thousands of years.",
+      "",
+      "You came to understand. Not to win.",
       "",
       "The journey itself is the reward.",
     ];
@@ -1294,8 +1505,8 @@ class Game {
       const a = clamp((this.endingT - at) / 1.5, 0, 1) * fade;
       if (a <= 0) continue;
       dc.fillStyle = `rgba(220,230,240,${a})`;
-      dc.font = `${(i === 4 ? 13 : 11) * s}px "Courier New",monospace`;
-      dc.fillText(lines[i], w / 2, h * 0.4 + i * 22 * s);
+      dc.font = `${(i === lines.length - 1 ? 12 : 10) * s}px "Courier New",monospace`;
+      dc.fillText(lines[i], w / 2, h * 0.16 + i * 17 * s);
     }
     dc.restore();
   }
