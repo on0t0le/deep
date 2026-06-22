@@ -490,6 +490,7 @@ class SaveSystem {
   static KEY = "endless-descent";
   static load() { try { return JSON.parse(localStorage.getItem(SaveSystem.KEY)) || null; } catch (e) { return null; } }
   static save(d) { try { localStorage.setItem(SaveSystem.KEY, JSON.stringify(d)); } catch (e) {} }
+  static clear() { try { localStorage.removeItem(SaveSystem.KEY); } catch (e) {} }
 }
 
 /* ---------- Renderer ---------- */
@@ -547,6 +548,7 @@ class Game {
     this.endingT = this.ended ? 99 : 0;
     this.implodeT = 0;
     this.boatMsg = "";
+    this.restartArm = 0;   // >0 while waiting for confirm keypress
 
     this._resetDiveVars();
     this._loop = this._loop.bind(this);
@@ -567,10 +569,10 @@ class Game {
   _updateHint() {
     const h = document.getElementById("hint");
     if (this.mode === "DIVE")
-      h.textContent = "WASD move · SPACE sonar · SHIFT boost · 1/2/3 lights · J journal · M mute · ESC pause";
+      h.textContent = "WASD move · SPACE sonar · SHIFT boost · 1/2/3 lights · J journal · M mute · ESC pause · R restart";
     else if (this.mode === "BOAT")
-      h.textContent = "1 workshop · 2 journal · 3 dive · M mute";
-    else h.textContent = "";
+      h.textContent = "1 workshop · 2 journal · 3 dive · M mute · R restart";
+    else h.textContent = "R restart";
   }
 
   /* ---------- discovery ---------- */
@@ -600,6 +602,13 @@ class Game {
     if (dt > 0.05) dt = 0.05;
     if (this.input.any()) this.audio.ensure();
     if (this.input.take("KeyM")) this.audio.toggleMute();
+    if (this.restartArm > 0) {
+      this.restartArm -= dt;
+      if (this.input.take("KeyR")) this._restart();
+      else if (this.restartArm <= 0) this.restartArm = 0;
+    } else if (this.input.take("KeyR")) {
+      this.restartArm = 3;
+    }
     this.t += dt;
     if (this.mode === "DIVE") this._updateDive(dt);
     else if (this.mode === "BOAT") this._updateBoat(dt);
@@ -738,6 +747,23 @@ class Game {
     this._updateHint();
   }
 
+  _restart() {
+    SaveSystem.clear();
+    this.restartArm = 0;
+    this.seed = Math.floor(Math.random() * 1e9) | 0;
+    this.maxDepth = 0;
+    this.secured.clear(); this.story.clear(); this.provisional.clear(); this.provUnlocks.clear();
+    this.popups = []; this.story_lines = []; this.reading = null;
+    this.ended = false; this.endDone = false; this.endingT = 0; this.implodeT = 0;
+    this.upgrades = new UpgradeSystem(null);
+    this.light = this.upgrades.lights[0] || "blue";
+    this.chunks = new ChunkManager(this.seed);
+    this.audio.setThruster(false);
+    this.mode = "BOAT"; this.showJournal = false; this.paused = false;
+    this.boatMsg = "Restarted. A new ocean awaits.";
+    this._resetDiveVars();
+    this._updateHint();
+  }
   _implode() {
     this.provisional.clear(); this.provUnlocks.clear();   // unsecured progress lost
     this.audio.setThruster(false); this.audio.implosion();
@@ -821,11 +847,20 @@ class Game {
 
   /* ---------------- render ---------------- */
   render() {
-    if (this.mode === "BOAT") { this._renderBoat(); return; }
-    if (this.mode === "ENDING" && this.endDone) { this._renderEndScreen(); return; }
+    if (this.mode === "BOAT") { this._renderBoat(); this._drawRestartConfirm(); return; }
+    if (this.mode === "ENDING" && this.endDone) { this._renderEndScreen(); this._drawRestartConfirm(); return; }
     this._renderWorld();
     if (this.mode === "IMPLODE") this._renderImplode();
     if (this.mode === "ENDING") this._renderEnding();
+    this._drawRestartConfirm();
+  }
+  _drawRestartConfirm() {
+    if (this.restartArm <= 0) return;
+    const dc = this.renderer.dctx, s = this.renderer.scale, w = W * s, h = H * s;
+    dc.textAlign = "center"; dc.font = `bold ${9 * s}px "Courier New",monospace`;
+    dc.fillStyle = "rgba(0,0,0,0.55)"; dc.fillRect(0, h - 26 * s, w, 18 * s);
+    dc.fillStyle = "#ff8a6a";
+    dc.fillText("Press R again to restart — all progress will be lost", w / 2, h - 13 * s);
   }
 
   _shade(rgb, bri) { return `rgb(${(rgb[0] * bri) | 0},${(rgb[1] * bri) | 0},${(rgb[2] * bri) | 0})`; }
