@@ -275,6 +275,7 @@ class ChunkManager {
       const pool = ARCHETYPES.filter(a => Math.abs(a.biome - biome) <= 1);
       const arch = pool[Math.floor(rng() * pool.length)] || ARCHETYPES[0];
       const lx = Math.floor(rng() * CHUNK), ly = Math.floor(rng() * CHUNK);
+      if (baseTy + ly < 0) continue;
       if (SOLID[tiles[ly * CHUNK + lx]]) continue;
       creatures.push({
         arch,
@@ -710,7 +711,7 @@ class Game {
     if (this._free(nx + Math.sign(this.vx) * R, this.py)) this.px = nx; else this.vx = 0;
     let ny = this.py + this.vy * dt;
     if (this._free(this.px, ny + Math.sign(this.vy) * R)) this.py = ny; else this.vy = 0;
-    if (this.py < -40) { this.py = -40; this.vy = 0; }
+    if (this.py < 0) { this.py = 0; this.vy = 0; }
 
     // sonar
     if (inp.take("Space")) { if (this.sonar.ping(this.px, this.py, this.upgrades.sonarRange())) this.audio.ping(); }
@@ -742,8 +743,8 @@ class Game {
     // arrival at the bottom -> ending
     if (this.depth >= BOTTOM_TILE - 2) { this._beginEnding(); return; }
 
-    // surfacing ends the dive once the sub visibly breaches into open air
-    if (this.py <= -30 && this.diveMax > 20) this._dock();
+    // surfacing ends the dive once the sub reaches the surface line
+    if (this.py <= 0 && this.diveMax > 20) this._dock();
 
     this.saveTimer += dt;
     if (this.saveTimer > 5) { this.saveTimer = 0; this._save(); }
