@@ -1,0 +1,1242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Endless Descent</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: #000;
+    overflow: hidden;
+    color: #cdd;
+    font-family: "Courier New", monospace;
+  }
+  #wrap {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  canvas {
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    display: block;
+  }
+  #hint {
+    position: fixed;
+    left: 50%;
+    bottom: 10px;
+    transform: translateX(-50%);
+    font-size: 11px;
+    color: #456;
+    letter-spacing: 1px;
+    pointer-events: none;
+    user-select: none;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="screen"></canvas></div>
+<div id="hint"></div>
+<script>
+"use strict";
+(function () {
+
+/* ============================================================
+   Endless Descent — single-file procedural ocean dive (full game)
+   Architecture per docs/architecture.md.
+   ============================================================ */
+
+const W = 480, H = 270;
+const TILE = 15;
+const CHUNK = 16;
+const CHUNK_PX = CHUNK * TILE;
+const BOTTOM_TILE = 20000;       // final depth (the ocean has a bottom)
+
+// tile types
+const WATER = 0, ROCK = 1, SAND = 2, CORAL = 3, VENT = 4, RUIN = 5, GLASS = 6;
+const SOLID = { [ROCK]: 1, [SAND]: 1 };
+
+// hull crush depths by Mk index (I..V)
+const CRUSH = [500, 1500, 4000, 9000, 20000];
+const HULL_NAMES = ["Mk I", "Mk II", "Mk III", "Mk IV", "Mk V"];
+
+// current bands (depth m + required propeller power = 1+propeller level)
+const CURRENTS = [{ y: 2200, req: 2 }, { y: 6000, req: 3 }, { y: 11500, req: 3 }];
+
+const clamp = (v, lo, hi) => v < lo ? lo : v > hi ? hi : v;
+
+/* ---------- Noise ---------- */
+class Noise {
+  constructor(seed) { this.seed = seed | 0; }
+  hash(x, y) {
+    let h = (this.seed ^ Math.imul(x, 374761393) ^ Math.imul(y, 668265263)) | 0;
+    h = Math.imul(h ^ (h >>> 13), 1274126177);
+    h = h ^ (h >>> 16);
+    return (h >>> 0) / 4294967295;
+  }
+  value(x, y) {
+    const x0 = Math.floor(x), y0 = Math.floor(y);
+    const fx = x - x0, fy = y - y0;
+    const sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy);
+    const n00 = this.hash(x0, y0), n10 = this.hash(x0 + 1, y0);
+    const n01 = this.hash(x0, y0 + 1), n11 = this.hash(x0 + 1, y0 + 1);
+    const ix0 = n00 + (n10 - n00) * sx, ix1 = n01 + (n11 - n01) * sx;
+    return ix0 + (ix1 - ix0) * sy;
+  }
+  fbm(x, y, oct) {
+    oct = oct || 4;
+    let amp = 1, freq = 1, sum = 0, norm = 0;
+    for (let i = 0; i < oct; i++) {
+      sum += amp * this.value(x * freq + i * 13.7, y * freq - i * 7.3);
+      norm += amp; amp *= 0.5; freq *= 2;
+    }
+    return sum / norm;
+  }
+}
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function hashSeed(seed, a, b) {
+  let h = (seed ^ Math.imul(a, 0x9e3779b1) ^ Math.imul(b, 0x85ebca77)) | 0;
+  h = Math.imul(h ^ (h >>> 16), 0x45d9f3b);
+  return h | 0;
+}
+
+/* ---------- Biomes ---------- */
+const BIOMES = [
+  { name: "Surface",  water: [42, 112, 142] },
+  { name: "Twilight", water: [22, 64, 104] },
+  { name: "Midnight", water: [8, 22, 48] },
+  { name: "Abyss",    water: [12, 9, 28] },
+  { name: "Beyond",   water: [26, 6, 38] },
+];
+class BiomeGenerator {
+  static index(d) { return d < 100 ? 0 : d < 1000 ? 1 : d < 4000 ? 2 : d < 10000 ? 3 : 4; }
+  static at(d) { return BIOMES[BiomeGenerator.index(d)]; }
+  static ambient(d, t) {
+    if (d < 100) return 0.9 - d / 100 * 0.32;
+    if (d < 1000) return 0.58 - (d - 100) / 900 * 0.43;
+    if (d < 4000) return 0.15 - (d - 1000) / 3000 * 0.10;
+    if (d < 10000) return 0.05 - (d - 4000) / 6000 * 0.02;
+    return 0.035 + Math.sin(t * 0.5) * 0.015;
+  }
+  static water(d) {
+    const i = BiomeGenerator.index(d);
+    const a = BIOMES[i].water, b = BIOMES[Math.min(i + 1, 4)].water;
+    let f = 0;
+    if (i === 0) f = clamp(d / 100, 0, 1);
+    else if (i === 1) f = clamp((d - 100) / 900, 0, 1);
+    else if (i === 2) f = clamp((d - 1000) / 3000, 0, 1);
+    else if (i === 3) f = clamp((d - 4000) / 6000, 0, 1);
+    return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f];
+  }
+}
+
+/* ---------- Creature archetypes (light = hidden unless that lamp active) ---------- */
+const ARCHETYPES = [
+  { name: "School of Fish",  shape: "fish",  size: 6,  biome: 0, glow: [180, 200, 210] },
+  { name: "Small Jellyfish", shape: "jelly", size: 7,  biome: 0, glow: [160, 200, 220] },
+  { name: "Sea Turtle",      shape: "ray",   size: 11, biome: 0, glow: [120, 180, 140] },
+  { name: "Giant Ray",       shape: "ray",   size: 20, biome: 1, glow: [120, 150, 190] },
+  { name: "Drifting Squid",  shape: "eel",   size: 14, biome: 1, glow: [180, 130, 170] },
+  { name: "Silver Shoal",    shape: "fish",  size: 9,  biome: 1, glow: [200, 210, 220] },
+  { name: "Crimson Drifter", shape: "jelly", size: 10, biome: 1, glow: [235, 70, 80], light: "red" },
+  { name: "Anglerfish",      shape: "fish",  size: 13, biome: 2, glow: [255, 220, 120] },
+  { name: "Glowing Jelly",   shape: "jelly", size: 12, biome: 2, glow: [120, 220, 255] },
+  { name: "Lantern Eel",     shape: "eel",   size: 22, biome: 2, glow: [120, 255, 180] },
+  { name: "Ghost Jelly",     shape: "jelly", size: 13, biome: 2, glow: [205, 255, 245], light: "uv" },
+  { name: "White Whale",     shape: "whale", size: 40, biome: 3, glow: [220, 225, 235] },
+  { name: "Pale Drifter",    shape: "jelly", size: 18, biome: 3, glow: [200, 190, 220] },
+  { name: "Phantom Ray",     shape: "ray",   size: 28, biome: 3, glow: [180, 160, 255], light: "uv" },
+  { name: "Dream Wisp",      shape: "wisp",  size: 10, biome: 4, glow: [230, 140, 255] },
+  { name: "Impossible Form", shape: "wisp",  size: 26, biome: 4, glow: [255, 120, 200] },
+];
+
+/* ---------- Points of interest: blueprints / logs / wrecks / rare phenomena ----------
+   Placed deterministically in the open channel at their depth, so always reachable. */
+const POIS = [
+  { id: "valve",   name: "Pressure Valve",      depth: 420,   kind: "bp", apply: u => u.hull = Math.max(u.hull, 1) },
+  { id: "oxy",     name: "Oxygen Recycler",     depth: 900,   kind: "bp", apply: u => u.oxygen = Math.max(u.oxygen, 1) },
+  { id: "crystal", name: "Sonar Crystal",       depth: 1300,  kind: "bp", apply: u => u.sonar = Math.max(u.sonar, 1) },
+  { id: "plating", name: "Reinforced Plating",  depth: 1400,  kind: "bp", apply: u => u.hull = Math.max(u.hull, 2) },
+  { id: "rotor",   name: "Current Rotor",       depth: 1800,  kind: "bp", apply: u => u.propeller = Math.max(u.propeller, 1) },
+  { id: "redlamp", name: "Red Lamp Filter",     depth: 2500,  kind: "bp", apply: u => { if (!u.lights.includes("red")) u.lights.push("red"); } },
+  { id: "turbine", name: "Turbine Core",        depth: 3500,  kind: "bp", apply: u => u.propeller = Math.max(u.propeller, 2) },
+  { id: "alloy",   name: "Unknown Alloy",       depth: 3800,  kind: "bp", apply: u => u.hull = Math.max(u.hull, 3) },
+  { id: "bacteria",name: "Bioluminescent Bacteria", depth: 8000, kind: "bp", apply: u => { if (!u.lights.includes("uv")) u.lights.push("uv"); u.oxygen = Math.max(u.oxygen, 2); } },
+  { id: "core",    name: "Abyssal Core",        depth: 8500,  kind: "bp", apply: u => u.hull = Math.max(u.hull, 4) },
+  // story logs
+  { id: "log1", name: "Old Dive Log",        depth: 1600, kind: "log", text: "Day 40. The valves hold. The deep hums to me at night." },
+  { id: "log2", name: "Torn Journal Page",   depth: 4200, kind: "log", text: "We were not the first. Lights below that answer ours." },
+  { id: "log3", name: "Final Transmission",  depth: 9200, kind: "log", text: "It is beautiful down here. I am not going back." },
+  // wreck (stage 4)
+  { id: "wreck1", name: "Abandoned Submarine", depth: 5500, kind: "wreck", text: "Hull split clean. Whoever they were, they went deeper." },
+  // rare phenomena
+  { id: "island", name: "Living Island",  depth: 600,   kind: "rare" },
+  { id: "trench", name: "Singing Trench", depth: 3000,  kind: "rare" },
+  { id: "forest", name: "Crystal Forest", depth: 7000,  kind: "rare" },
+  { id: "chasm",  name: "Endless Chasm",  depth: 12000, kind: "rare" },
+  { id: "sun",    name: "Black Sun",      depth: 19000, kind: "rare" },
+];
+const POI_BY_ID = {}; POIS.forEach(p => POI_BY_ID[p.id] = p);
+
+/* ---------- Story beats (fire once at depth, persisted) ---------- */
+const STORY_BEATS = [
+  { id: "s1", depth: 30,    line: "The surface fades. Sunlight on coral." },
+  { id: "s2", depth: 250,   line: "Blue deepens. Larger shapes drift past." },
+  { id: "s3", depth: 1200,  line: "Darkness now. Only your light, and theirs." },
+  { id: "s4", depth: 4500,  line: "Ruins. Someone built here, long ago." },
+  { id: "s5", depth: 10500, line: "Beyond. The water no longer obeys." },
+  { id: "s6", depth: 18000, line: "Something below. The final descent." },
+];
+
+/* ---------- Terrain + chunks ---------- */
+class TerrainGenerator {
+  constructor(seed) {
+    this.seed = seed;
+    this.rockN = new Noise(seed);
+    this.caveN = new Noise(seed + 555);
+    this.chanN = new Noise(seed + 999);
+    this.decoN = new Noise(seed + 314);
+  }
+  channelCenter(ty) {
+    return Math.round((this.chanN.fbm(ty * 0.02, 0.5, 3) - 0.5) * 130);
+  }
+  baseSolid(tx, ty) {
+    if (ty < 0) return false;
+    if (ty >= BOTTOM_TILE) return true;          // the ocean floor: arrival
+    const depth = ty;
+    let thr;
+    if (depth < 100) thr = 0.80;
+    else if (depth < 1000) thr = 0.67;
+    else if (depth < 4000) thr = 0.61;
+    else thr = 0.57;
+    const rock = this.rockN.fbm(tx * 0.07, ty * 0.07, 4);
+    let solid = rock > thr;
+    const cave = this.caveN.fbm(tx * 0.12, ty * 0.12, 3);
+    if (cave > 0.42 && cave < 0.50) solid = false;
+    if (Math.abs(tx - this.channelCenter(ty)) <= 3) solid = false;  // open channel
+    return solid;
+  }
+  type(tx, ty) {
+    if (!this.baseSolid(tx, ty)) {
+      if (this.baseSolid(tx, ty + 1)) {
+        const depth = ty, r = this.decoN.hash(tx, ty);
+        if (depth < 1000) { if (r > 0.86) return r > 0.985 ? GLASS : CORAL; }
+        else if (depth < 4000) { if (r > 0.90) return VENT; }
+        else { if (r > 0.88) return RUIN; if (r > 0.985) return VENT; }
+      }
+      return WATER;
+    }
+    if (ty < 1000 && !this.baseSolid(tx, ty - 1)) return SAND;
+    return ROCK;
+  }
+}
+
+class Chunk {
+  constructor(cx, cy, tiles, creatures, pois) {
+    this.cx = cx; this.cy = cy;
+    this.tiles = tiles; this.creatures = creatures; this.pois = pois;
+  }
+}
+class ChunkManager {
+  constructor(seed) {
+    this.terrain = new TerrainGenerator(seed);
+    this.seed = seed;
+    this.map = new Map();
+    this.cap = 64;
+  }
+  key(cx, cy) { return cx + "," + cy; }
+  generate(cx, cy) {
+    const tiles = new Uint8Array(CHUNK * CHUNK);
+    const baseTx = cx * CHUNK, baseTy = cy * CHUNK;
+    for (let ly = 0; ly < CHUNK; ly++)
+      for (let lx = 0; lx < CHUNK; lx++)
+        tiles[ly * CHUNK + lx] = this.terrain.type(baseTx + lx, baseTy + ly);
+    // creatures
+    const creatures = [];
+    const rng = mulberry32(hashSeed(this.seed, cx, cy));
+    const depth = Math.max(0, baseTy + CHUNK / 2);
+    const biome = BiomeGenerator.index(depth);
+    const want = depth < 100 ? 3 : depth < 1000 ? 2 : depth < 4000 ? 2 : 1;
+    for (let i = 0; i < want; i++) {
+      if (rng() > 0.55) continue;
+      const pool = ARCHETYPES.filter(a => Math.abs(a.biome - biome) <= 1);
+      const arch = pool[Math.floor(rng() * pool.length)] || ARCHETYPES[0];
+      const lx = Math.floor(rng() * CHUNK), ly = Math.floor(rng() * CHUNK);
+      if (SOLID[tiles[ly * CHUNK + lx]]) continue;
+      creatures.push({
+        arch,
+        ax: (baseTx + lx + 0.5) * TILE, ay: (baseTy + ly + 0.5) * TILE,
+        phase: rng() * Math.PI * 2, spd: 0.3 + rng() * 0.6,
+        range: 18 + rng() * 30, flip: rng() < 0.5,
+        bodyLength: arch.size, tailLength: arch.size * 0.6,
+        finCount: 2 + Math.floor(rng() * 3), x: 0, y: 0,
+      });
+    }
+    // POIs that fall in this chunk (deterministic, unique)
+    const pois = [];
+    for (const p of POIS) {
+      const pty = p.depth, ptx = this.terrain.channelCenter(pty);
+      if (Math.floor(ptx / CHUNK) === cx && Math.floor(pty / CHUNK) === cy)
+        pois.push({ poi: p, x: (ptx + 0.5) * TILE, y: (pty + 0.5) * TILE });
+    }
+    return new Chunk(cx, cy, tiles, creatures, pois);
+  }
+  getChunk(cx, cy) {
+    const k = this.key(cx, cy);
+    let c = this.map.get(k);
+    if (c) { this.map.delete(k); this.map.set(k, c); return c; }
+    c = this.generate(cx, cy);
+    this.map.set(k, c);
+    if (this.map.size > this.cap) this.map.delete(this.map.keys().next().value);
+    return c;
+  }
+  getTile(tx, ty) {
+    if (ty < 0) return WATER;
+    const cx = Math.floor(tx / CHUNK), cy = Math.floor(ty / CHUNK);
+    const c = this.getChunk(cx, cy);
+    return c.tiles[(ty - cy * CHUNK) * CHUNK + (tx - cx * CHUNK)];
+  }
+  isSolidPx(x, y) { return !!SOLID[this.getTile(Math.floor(x / TILE), Math.floor(y / TILE))]; }
+  forEachChunkInPx(x0, y0, x1, y1, fn) {
+    const cx0 = Math.floor(x0 / CHUNK_PX), cx1 = Math.floor(x1 / CHUNK_PX);
+    const cy0 = Math.floor(y0 / CHUNK_PX), cy1 = Math.floor(y1 / CHUNK_PX);
+    for (let cy = cy0; cy <= cy1; cy++)
+      for (let cx = cx0; cx <= cx1; cx++) fn(this.getChunk(cx, cy));
+  }
+  forEachCreature(x0, y0, x1, y1, fn) {
+    this.forEachChunkInPx(x0, y0, x1, y1, c => { for (const cr of c.creatures) fn(cr); });
+  }
+  forEachPOI(x0, y0, x1, y1, fn) {
+    this.forEachChunkInPx(x0, y0, x1, y1, c => { for (const s of c.pois) fn(s); });
+  }
+}
+
+/* ---------- Input ---------- */
+class Input {
+  constructor() {
+    this.keys = {}; this.pressed = {};
+    addEventListener("keydown", e => {
+      if (["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.code)) e.preventDefault();
+      if (!this.keys[e.code]) this.pressed[e.code] = true;
+      this.keys[e.code] = true;
+    });
+    addEventListener("keyup", e => { this.keys[e.code] = false; });
+    addEventListener("blur", () => { this.keys = {}; });
+  }
+  down(c) { return !!this.keys[c]; }
+  take(c) { if (this.pressed[c]) { this.pressed[c] = false; return true; } return false; }
+  any() { for (const k in this.pressed) if (this.pressed[k]) return true; return false; }
+}
+
+/* ---------- Sonar ---------- */
+class SonarSystem {
+  constructor() { this.reveal = new Map(); this.rings = []; this.cooldown = 0; }
+  ping(x, y, maxR) {
+    if (this.cooldown > 0) return false;
+    this.rings.push({ x, y, r: 0, max: maxR });
+    this.cooldown = 1.1; return true;
+  }
+  update(dt, fade) {
+    if (this.cooldown > 0) this.cooldown -= dt;
+    const band = TILE * 2;
+    for (let i = this.rings.length - 1; i >= 0; i--) {
+      const ring = this.rings[i];
+      ring.r += dt * 260;
+      const inner = ring.r - band, outer = ring.r;
+      const tx0 = Math.floor((ring.x - outer) / TILE), tx1 = Math.floor((ring.x + outer) / TILE);
+      const ty0 = Math.floor((ring.y - outer) / TILE), ty1 = Math.floor((ring.y + outer) / TILE);
+      for (let ty = ty0; ty <= ty1; ty++)
+        for (let tx = tx0; tx <= tx1; tx++) {
+          const cx = (tx + 0.5) * TILE - ring.x, cy = (ty + 0.5) * TILE - ring.y;
+          const d = Math.sqrt(cx * cx + cy * cy);
+          if (d >= inner && d <= outer) this.reveal.set(tx + "," + ty, 1);
+        }
+      if (ring.r > ring.max) this.rings.splice(i, 1);
+    }
+    for (const k of this.reveal.keys()) {
+      const v = this.reveal.get(k) - dt * fade;
+      if (v <= 0) this.reveal.delete(k); else this.reveal.set(k, v);
+    }
+  }
+  at(tx, ty) { return this.reveal.get(tx + "," + ty) || 0; }
+  clear() { this.reveal.clear(); this.rings.length = 0; }
+}
+
+/* ---------- Upgrades ---------- */
+class UpgradeSystem {
+  constructor(s) {
+    s = s || {};
+    this.hull = s.hull || 0;
+    this.oxygen = s.oxygen || 0;
+    this.sonar = s.sonar || 0;
+    this.propeller = s.propeller || 0;
+    this.lights = s.lights || ["blue"];
+    this.unlocked = new Set(s.unlocked || []);   // blueprint ids available at workshop
+    this.applied = new Set(s.applied || []);     // already installed
+  }
+  crushDepth() { return CRUSH[this.hull]; }
+  oxygenCap() { return 1 + this.oxygen * 0.8; }
+  sonarRange() { return 230 + this.sonar * 130; }
+  sonarFade() { return Math.max(0.12, 0.35 - this.sonar * 0.07); }
+  propPower() { return 1 + this.propeller; }
+  pending() { return [...this.unlocked].filter(id => !this.applied.has(id)); }
+  apply(id) {
+    if (this.applied.has(id) || !this.unlocked.has(id)) return null;
+    const p = POI_BY_ID[id]; if (!p || !p.apply) return null;
+    p.apply(this); this.applied.add(id);
+    return p.name;
+  }
+  serialize() {
+    return {
+      hull: this.hull, oxygen: this.oxygen, sonar: this.sonar, propeller: this.propeller,
+      lights: this.lights, unlocked: [...this.unlocked], applied: [...this.applied],
+    };
+  }
+}
+
+/* ---------- Audio (procedural WebAudio, no assets) ---------- */
+class AudioSystem {
+  constructor() { this.ctx = null; this.muted = false; this.started = false; }
+  ensure() {
+    if (this.ctx) { if (this.ctx.state === "suspended") this.ctx.resume(); return; }
+    const C = window.AudioContext || window.webkitAudioContext;
+    if (!C) return;
+    this.ctx = new C();
+    this.master = this.ctx.createGain();
+    this.master.gain.value = this.muted ? 0 : 0.45;
+    this.master.connect(this.ctx.destination);
+    // ambient drone: low osc + filtered noise loop
+    this.drone = this.ctx.createOscillator(); this.drone.type = "sine"; this.drone.frequency.value = 55;
+    this.droneGain = this.ctx.createGain(); this.droneGain.gain.value = 0.10;
+    this.drone.connect(this.droneGain); this.droneGain.connect(this.master); this.drone.start();
+    const noise = this._noise(true);
+    this.noiseFilter = this.ctx.createBiquadFilter();
+    this.noiseFilter.type = "lowpass"; this.noiseFilter.frequency.value = 380;
+    this.noiseGain = this.ctx.createGain(); this.noiseGain.gain.value = 0.05;
+    noise.connect(this.noiseFilter); this.noiseFilter.connect(this.noiseGain); this.noiseGain.connect(this.master);
+    noise.start();
+    // thruster (gated noise)
+    const tn = this._noise(true);
+    this.thFilter = this.ctx.createBiquadFilter(); this.thFilter.type = "bandpass";
+    this.thFilter.frequency.value = 240; this.thFilter.Q.value = 0.7;
+    this.thGain = this.ctx.createGain(); this.thGain.gain.value = 0;
+    tn.connect(this.thFilter); this.thFilter.connect(this.thGain); this.thGain.connect(this.master);
+    tn.start();
+    this.started = true;
+  }
+  _noise(loop) {
+    const len = this.ctx.sampleRate * 2;
+    const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    const src = this.ctx.createBufferSource(); src.buffer = buf; src.loop = !!loop;
+    return src;
+  }
+  toggleMute() { this.muted = !this.muted; if (this.master) this.master.gain.value = this.muted ? 0 : 0.45; }
+  setDepth(d) {
+    if (!this.ctx) return;
+    const f = clamp(55 - d * 0.0012, 30, 55);
+    this.drone.frequency.setTargetAtTime(f, this.ctx.currentTime, 0.5);
+    this.noiseFilter.frequency.setTargetAtTime(clamp(420 - d * 0.012, 120, 420), this.ctx.currentTime, 0.5);
+  }
+  setThruster(on) {
+    if (!this.ctx) return;
+    this.thGain.gain.setTargetAtTime(on ? 0.05 : 0, this.ctx.currentTime, 0.08);
+  }
+  _tone(freq, dur, type, vol, sweepTo) {
+    if (!this.ctx || this.muted) return;
+    const t = this.ctx.currentTime;
+    const o = this.ctx.createOscillator(); o.type = type || "sine"; o.frequency.value = freq;
+    if (sweepTo) o.frequency.exponentialRampToValueAtTime(sweepTo, t + dur);
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol || 0.2, t + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(this.master); o.start(t); o.stop(t + dur + 0.05);
+  }
+  ping() { this._tone(880, 0.5, "sine", 0.22, 1760); this._tone(440, 0.7, "sine", 0.12, 330); }
+  chime() { this._tone(660, 0.25, "sine", 0.2); setTimeout(() => this._tone(990, 0.3, "sine", 0.18), 120); setTimeout(() => this._tone(1320, 0.4, "sine", 0.14), 260); }
+  rare() { this._tone(330, 0.6, "triangle", 0.2, 880); setTimeout(() => this._tone(495, 0.6, "sine", 0.16, 990), 200); }
+  creak() { this._tone(90, 0.4, "sawtooth", 0.06, 60); }
+  implosion() {
+    if (!this.ctx || this.muted) return;
+    const t = this.ctx.currentTime;
+    const n = this._noise(false);
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.5, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 1.2);
+    const f = this.ctx.createBiquadFilter(); f.type = "lowpass";
+    f.frequency.setValueAtTime(1200, t); f.frequency.exponentialRampToValueAtTime(60, t + 1.0);
+    n.connect(f); f.connect(g); g.connect(this.master); n.start(t); n.stop(t + 1.3);
+    this._tone(200, 1.0, "sawtooth", 0.25, 40);
+  }
+  swell() { this._tone(110, 2.5, "sine", 0.18, 220); setTimeout(() => this._tone(165, 2.5, "sine", 0.14, 330), 400); }
+}
+
+/* ---------- Save ---------- */
+class SaveSystem {
+  static KEY = "endless-descent";
+  static load() { try { return JSON.parse(localStorage.getItem(SaveSystem.KEY)) || null; } catch (e) { return null; } }
+  static save(d) { try { localStorage.setItem(SaveSystem.KEY, JSON.stringify(d)); } catch (e) {} }
+}
+
+/* ---------- Renderer ---------- */
+class Renderer {
+  constructor(display) {
+    this.display = display;
+    this.dctx = display.getContext("2d");
+    this.buf = document.createElement("canvas");
+    this.buf.width = W; this.buf.height = H;
+    this.ctx = this.buf.getContext("2d");
+    this.scale = 1; this.resize();
+    addEventListener("resize", () => this.resize());
+  }
+  resize() {
+    const s = Math.max(1, Math.floor(Math.min(innerWidth / W, innerHeight / H)));
+    this.scale = s;
+    this.display.width = W * s; this.display.height = H * s;
+    this.display.style.width = (W * s) + "px"; this.display.style.height = (H * s) + "px";
+    this.dctx.imageSmoothingEnabled = false;
+  }
+  present() { this.dctx.drawImage(this.buf, 0, 0, W * this.scale, H * this.scale); }
+}
+
+const FEATURE_NAMES = { [CORAL]: "Coral Reef", [GLASS]: "Glass Coral", [VENT]: "Thermal Vent", [RUIN]: "Ancient Ruin" };
+const LIGHT_TINT = { blue: [150, 200, 230], red: [235, 120, 110], uv: [190, 140, 235] };
+
+/* ---------- Game ---------- */
+class Game {
+  constructor() {
+    const s = SaveSystem.load();
+    this.seed = (s && s.worldSeed) || (Math.floor(Math.random() * 1e9) | 0);
+    this.maxDepth = (s && s.maxDepth) || 0;
+    this.secured = new Set((s && s.discoveries) || []);
+    this.story = new Set((s && s.story) || []);
+    this.ended = !!(s && s.ending);
+    this.upgrades = new UpgradeSystem(s && s.upgrades);
+
+    this.input = new Input();
+    this.renderer = new Renderer(document.getElementById("screen"));
+    this.ctx = this.renderer.ctx;
+    this.chunks = new ChunkManager(this.seed);
+    this.sonar = new SonarSystem();
+    this.audio = new AudioSystem();
+
+    this.provisional = new Set();   // discovery names pending until surfaced
+    this.provUnlocks = new Set();   // blueprint ids pending until surfaced
+    this.popups = [];               // {name, sub, life, rare}
+    this.story_lines = [];          // narrative beats {line, life}
+    this.reading = null;            // {title, text, t}
+    this.light = this.upgrades.lights[0] || "blue";
+    this.t = 0; this.saveTimer = 0;
+
+    this.mode = this.ended ? "ENDING" : "BOAT";
+    this.endDone = this.ended;      // reloaded into a finished game
+    this.endingT = this.ended ? 99 : 0;
+    this.implodeT = 0;
+    this.boatMsg = "";
+
+    this._resetDiveVars();
+    this._loop = this._loop.bind(this);
+    this.last = performance.now();
+    requestAnimationFrame(this._loop);
+    this._updateHint();
+  }
+
+  _resetDiveVars() {
+    this.px = this.chunks.terrain.channelCenter(0) * TILE;
+    this.py = 24; this.vx = 0; this.vy = 0; this.facing = 1;
+    this.oxygen = 1; this.pressure = 0; this.diveMax = 0;
+    this.currentBlocked = false;
+    this.sonar.clear();
+  }
+  get depth() { return Math.max(0, Math.floor(this.py / TILE)); }
+
+  _updateHint() {
+    const h = document.getElementById("hint");
+    if (this.mode === "DIVE")
+      h.textContent = "WASD move · SPACE sonar · SHIFT boost · 1/2/3 lights · J journal · M mute · ESC pause";
+    else if (this.mode === "BOAT")
+      h.textContent = "1 workshop · 2 journal · 3 dive · M mute";
+    else h.textContent = "";
+  }
+
+  /* ---------- discovery ---------- */
+  discover(name, rare, sub) {
+    if (this.secured.has(name) || this.provisional.has(name)) return;
+    this.provisional.add(name);
+    this.popups.push({ name, sub: sub || (rare ? "Rare Discovery" : "Discovered"), life: 3.4, rare: !!rare });
+    rare ? this.audio.rare() : this.audio.chime();
+  }
+  discoverPOI(s) {
+    const p = s.poi;
+    if (this.secured.has(p.name) || this.provisional.has(p.name)) return;
+    if (p.kind === "bp") {
+      this.provUnlocks.add(p.id);
+      this.discover(p.name, false, "Blueprint recovered");
+    } else if (p.kind === "log" || p.kind === "wreck") {
+      this.discover(p.name, false, "Logged");
+      this.reading = { title: p.name, text: p.text, t: 5 };
+    } else { // rare phenomenon
+      this.discover(p.name, true);
+    }
+  }
+
+  /* ---------- main loop ---------- */
+  _loop(now) {
+    let dt = (now - this.last) / 1000; this.last = now;
+    if (dt > 0.05) dt = 0.05;
+    if (this.input.any()) this.audio.ensure();
+    if (this.input.take("KeyM")) this.audio.toggleMute();
+    this.t += dt;
+    if (this.mode === "DIVE") this._updateDive(dt);
+    else if (this.mode === "BOAT") this._updateBoat(dt);
+    else if (this.mode === "IMPLODE") this._updateImplode(dt);
+    else if (this.mode === "ENDING") this._updateEnding(dt);
+    this._tickPopups(dt);
+    this.render();
+    requestAnimationFrame(this._loop);
+  }
+  _tickPopups(dt) {
+    for (let i = this.popups.length - 1; i >= 0; i--) if ((this.popups[i].life -= dt) <= 0) this.popups.splice(i, 1);
+    for (let i = this.story_lines.length - 1; i >= 0; i--) if ((this.story_lines[i].life -= dt) <= 0) this.story_lines.splice(i, 1);
+    if (this.reading && (this.reading.t -= dt) <= 0) this.reading = null;
+  }
+
+  /* ---------- BOAT ---------- */
+  _updateBoat(dt) {
+    const inp = this.input;
+    if (inp.take("Digit1")) {            // workshop: install all pending upgrades
+      const pend = this.upgrades.pending();
+      if (pend.length) {
+        const names = pend.map(id => this.upgrades.apply(id)).filter(Boolean);
+        this.boatMsg = "Installed: " + names.join(", ");
+        this._save(); this.audio.chime();
+      } else this.boatMsg = "No new blueprints to install.";
+    }
+    if (inp.take("Digit2")) this.showJournal = !this.showJournal;
+    if (inp.take("Digit3") || inp.take("Enter") || inp.take("Space")) {
+      this.showJournal = false; this.boatMsg = "";
+      this.mode = "DIVE"; this._resetDiveVars(); this._updateHint();
+    }
+  }
+
+  /* ---------- DIVE ---------- */
+  _updateDive(dt) {
+    const inp = this.input;
+    if (inp.take("Escape")) { this.paused = !this.paused; }
+    if (inp.take("KeyJ")) this.showJournal = !this.showJournal;
+    if (this.paused || this.showJournal) { this.sonar.update(0, this.upgrades.sonarFade()); return; }
+
+    // light selection
+    if (inp.take("Digit1")) this.light = "blue";
+    if (inp.take("Digit2") && this.upgrades.lights.includes("red")) this.light = "red";
+    if (inp.take("Digit3") && this.upgrades.lights.includes("uv")) this.light = "uv";
+
+    // movement
+    const boosting = inp.down("ShiftLeft") || inp.down("ShiftRight");
+    const boost = boosting ? 1.9 : 1;
+    const acc = 520 * boost;
+    let ax = 0, ay = 0, moving = false;
+    if (inp.down("KeyA") || inp.down("ArrowLeft")) { ax -= acc; this.facing = -1; moving = true; }
+    if (inp.down("KeyD") || inp.down("ArrowRight")) { ax += acc; this.facing = 1; moving = true; }
+    if (inp.down("KeyW") || inp.down("ArrowUp")) { ay -= acc; moving = true; }
+    if (inp.down("KeyS") || inp.down("ArrowDown")) { ay += acc; moving = true; }
+    this.audio.setThruster(moving);
+    this.vx += ax * dt; this.vy += ay * dt;
+    const drag = Math.pow(0.0025, dt);
+    this.vx *= drag; this.vy *= drag;
+    const maxV = 150 * boost;
+    this.vx = clamp(this.vx, -maxV, maxV); this.vy = clamp(this.vy, -maxV, maxV);
+
+    // currents (propeller gate)
+    this.currentBlocked = false;
+    for (const c of CURRENTS) {
+      if (Math.abs(this.depth - c.y) < 160) {
+        const deficit = c.req - this.upgrades.propPower();
+        if (deficit > 0) { this.vy = Math.min(this.vy, -22 * deficit); this.currentBlocked = true; }
+      }
+    }
+
+    const R = 5;
+    let nx = this.px + this.vx * dt;
+    if (this._free(nx + Math.sign(this.vx) * R, this.py)) this.px = nx; else this.vx = 0;
+    let ny = this.py + this.vy * dt;
+    if (this._free(this.px, ny + Math.sign(this.vy) * R)) this.py = ny; else this.vy = 0;
+    if (this.py < -40) { this.py = -40; this.vy = 0; }
+
+    // sonar
+    if (inp.take("Space")) { if (this.sonar.ping(this.px, this.py, this.upgrades.sonarRange())) this.audio.ping(); }
+    this.sonar.update(dt, this.upgrades.sonarFade());
+
+    // oxygen
+    if (this.depth < 30) this.oxygen = Math.min(1, this.oxygen + dt * 0.5);
+    else this.oxygen = Math.max(0, this.oxygen - dt * (0.012 + this.depth * 0.000004) / this.upgrades.oxygenCap());
+    if (this.oxygen <= 0.0001) this.vy -= 40 * dt;   // gentle nudge up
+
+    // pressure / crush
+    const crush = this.upgrades.crushDepth();
+    if (this.depth > crush) {
+      const over = (this.depth - crush) / Math.max(200, crush * 0.3);
+      this.pressure = clamp(this.pressure + dt * (0.10 + over * 0.25), 0, 1);
+      if (Math.random() < dt * (1.5 + over * 3)) this.audio.creak();
+      if (this.pressure >= 1) { this._implode(); return; }
+    } else this.pressure = Math.max(0, this.pressure - dt * 0.25);
+
+    this.audio.setDepth(this.depth);
+    if (this.depth > this.maxDepth) this.maxDepth = this.depth;
+    if (this.depth > this.diveMax) this.diveMax = this.depth;
+
+    this._storyBeats();
+    this._updateCreatures(dt);
+    this._scanFeatures();
+    this._scanPOIs();
+
+    // arrival at the bottom -> ending
+    if (this.depth >= BOTTOM_TILE - 2) { this._beginEnding(); return; }
+
+    // surfacing ends the dive (secure discoveries)
+    if (this.depth <= 1 && this.diveMax > 20) this._dock();
+
+    this.saveTimer += dt;
+    if (this.saveTimer > 5) { this.saveTimer = 0; this._save(); }
+  }
+  _free(x, y) { return !this.chunks.isSolidPx(x, y); }
+
+  _storyBeats() {
+    for (const b of STORY_BEATS) {
+      if (!this.story.has(b.id) && this.depth >= b.depth) {
+        this.story.add(b.id);
+        this.story_lines.push({ line: b.line, life: 5 });
+        this.audio.creak();
+        this._save();
+      }
+    }
+  }
+
+  _dock() {
+    for (const n of this.provisional) this.secured.add(n);
+    for (const id of this.provUnlocks) this.upgrades.unlocked.add(id);
+    const got = this.provUnlocks.size;
+    this.provisional.clear(); this.provUnlocks.clear();
+    this._save();
+    this.audio.setThruster(false);
+    this.mode = "BOAT"; this.showJournal = false; this.paused = false;
+    this.boatMsg = got ? "Surfaced. " + got + " blueprint(s) ready to install (press 1)." : "Surfaced safely.";
+    this._updateHint();
+  }
+
+  _implode() {
+    this.provisional.clear(); this.provUnlocks.clear();   // unsecured progress lost
+    this.audio.setThruster(false); this.audio.implosion();
+    this.mode = "IMPLODE"; this.implodeT = 0; this._save();
+    this._updateHint();
+  }
+  _updateImplode(dt) {
+    this.implodeT += dt;
+    if (this.implodeT > 2.4) {
+      this.mode = "BOAT"; this._resetDiveVars();
+      this.boatMsg = "Hull failed at " + this.maxDepth + "m. You were pulled back to the boat.";
+      this._updateHint();
+    }
+  }
+
+  _beginEnding() {
+    if (this.mode === "ENDING") return;
+    this.mode = "ENDING"; this.endingT = 0; this.ended = true; this.endDone = false;
+    for (const n of this.provisional) this.secured.add(n);
+    for (const id of this.provUnlocks) this.upgrades.unlocked.add(id);
+    this.provisional.clear(); this.provUnlocks.clear();
+    this.audio.setThruster(false); this.audio.swell();
+    this._save();
+    this._updateHint();
+  }
+  _updateEnding(dt) {
+    this.endingT += dt;
+    if (this.endDone) { if (this.input.any()) { this.mode = "BOAT"; this._updateHint(); } return; }
+    if (this.endingT > 16) this.endDone = true;
+  }
+
+  _save() {
+    SaveSystem.save({
+      worldSeed: this.seed, maxDepth: this.maxDepth,
+      discoveries: [...this.secured], story: [...this.story],
+      upgrades: this.upgrades.serialize(), ending: this.ended,
+    });
+  }
+
+  _brightness(tx, ty) {
+    const cx = (tx + 0.5) * TILE, cy = (ty + 0.5) * TILE;
+    const dx = cx - this.px, dy = cy - this.py;
+    const d = Math.sqrt(dx * dx + dy * dy);
+    const lampR = 75 + (this.light === "uv" ? 20 : 0);
+    const lamp = clamp(1 - d / lampR, 0, 1) * 0.9;
+    const amb = BiomeGenerator.ambient(this.depth, this.t);
+    const rev = this.sonar.at(tx, ty) * 0.95;
+    return clamp(amb + lamp + rev, 0, 1);
+  }
+
+  _updateCreatures(dt) {
+    this.chunks.forEachCreature(this.px - W, this.py - H, this.px + W, this.py + H, c => {
+      c.x = c.ax + Math.cos(this.t * c.spd + c.phase) * c.range;
+      c.y = c.ay + Math.sin(this.t * c.spd * 0.7 + c.phase) * c.range * 0.5;
+      if (c.arch.light && c.arch.light !== this.light) return;   // hidden under wrong light
+      const dx = c.x - this.px, dy = c.y - this.py, d = Math.sqrt(dx * dx + dy * dy);
+      if (d < 90) {
+        const tx = Math.floor(c.x / TILE), ty = Math.floor(c.y / TILE);
+        if (this._brightness(tx, ty) > 0.28) this.discover(c.arch.name);
+      }
+    });
+  }
+  _scanFeatures() {
+    const ptx = Math.floor(this.px / TILE), pty = Math.floor(this.py / TILE);
+    for (let dy = -2; dy <= 2; dy++)
+      for (let dx = -2; dx <= 2; dx++) {
+        const tx = ptx + dx, ty = pty + dy, t = this.chunks.getTile(tx, ty);
+        const name = FEATURE_NAMES[t];
+        if (name && this._brightness(tx, ty) > 0.3) this.discover(name, t === GLASS);
+      }
+  }
+  _scanPOIs() {
+    this.chunks.forEachPOI(this.px - 120, this.py - 120, this.px + 120, this.py + 120, s => {
+      const dx = s.x - this.px, dy = s.y - this.py, d = Math.sqrt(dx * dx + dy * dy);
+      if (d < 70) {
+        const tx = Math.floor(s.x / TILE), ty = Math.floor(s.y / TILE);
+        if (this._brightness(tx, ty) > 0.25) this.discoverPOI(s);
+      }
+    });
+  }
+
+  /* ---------------- render ---------------- */
+  render() {
+    if (this.mode === "BOAT") { this._renderBoat(); return; }
+    if (this.mode === "ENDING" && this.endDone) { this._renderEndScreen(); return; }
+    this._renderWorld();
+    if (this.mode === "IMPLODE") this._renderImplode();
+    if (this.mode === "ENDING") this._renderEnding();
+  }
+
+  _shade(rgb, bri) { return `rgb(${(rgb[0] * bri) | 0},${(rgb[1] * bri) | 0},${(rgb[2] * bri) | 0})`; }
+
+  _renderWorld() {
+    const ctx = this.ctx, depth = this.depth, water = BiomeGenerator.water(depth);
+    ctx.fillStyle = `rgb(${water[0] | 0},${water[1] | 0},${water[2] | 0})`;
+    ctx.fillRect(0, 0, W, H);
+
+    const camX = this.px - W / 2, camY = this.py - H / 2;
+    const tx0 = Math.floor(camX / TILE), tx1 = Math.floor((camX + W) / TILE);
+    const ty0 = Math.floor(camY / TILE), ty1 = Math.floor((camY + H) / TILE);
+    for (let ty = ty0; ty <= ty1; ty++)
+      for (let tx = tx0; tx <= tx1; tx++) {
+        const type = this.chunks.getTile(tx, ty);
+        const bri = this._brightness(tx, ty);
+        this._drawTile(ctx, type, tx, ty, Math.round(tx * TILE - camX), Math.round(ty * TILE - camY), bri);
+      }
+
+    // POIs
+    this.chunks.forEachPOI(camX - 60, camY - 60, camX + W + 60, camY + H + 60, s => {
+      const tx = Math.floor(s.x / TILE), ty = Math.floor(s.y / TILE);
+      const bri = clamp(this._brightness(tx, ty) + 0.1, 0, 1);
+      this._drawPOI(ctx, s.x - camX, s.y - camY, s.poi, bri);
+    });
+    // creatures
+    this.chunks.forEachCreature(camX - 60, camY - 60, camX + W + 60, camY + H + 60, c => {
+      if (c.arch.light && c.arch.light !== this.light) return;
+      const sx = c.x - camX, sy = c.y - camY;
+      if (sx < -60 || sx > W + 60 || sy < -60 || sy > H + 60) return;
+      const tx = Math.floor(c.x / TILE), ty = Math.floor(c.y / TILE);
+      const bri = clamp(this._brightness(tx, ty) + 0.12, 0, 1);
+      this._drawCreature(ctx, sx, sy, c, bri);
+    });
+
+    // current streaks
+    if (this.currentBlocked) this._drawCurrent(ctx, camY);
+
+    this._drawSub(ctx, W / 2, H / 2);
+
+    ctx.strokeStyle = "rgba(150,220,230,0.25)";
+    for (const ring of this.sonar.rings) {
+      ctx.beginPath(); ctx.arc(ring.x - camX, ring.y - camY, ring.r, 0, Math.PI * 2); ctx.stroke();
+    }
+    // pressure vignette
+    if (this.pressure > 0.01) {
+      const g = ctx.createRadialGradient(W / 2, H / 2, H * 0.25, W / 2, H / 2, H * 0.7);
+      g.addColorStop(0, "rgba(120,0,0,0)");
+      g.addColorStop(1, `rgba(140,0,0,${this.pressure * 0.55})`);
+      ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    }
+
+    this.renderer.present();
+    this._drawUI();
+  }
+
+  _drawCurrent(ctx, camY) {
+    ctx.strokeStyle = "rgba(180,210,230,0.18)";
+    for (let i = 0; i < 14; i++) {
+      const y = (i * 23 + ((this.t * 40) % 23)) % H;
+      const off = Math.sin((y + this.t * 60) * 0.05) * 8;
+      ctx.beginPath(); ctx.moveTo(40 + off, y); ctx.lineTo(120 + off, y); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(300 + off, y + 10); ctx.lineTo(380 + off, y + 10); ctx.stroke();
+    }
+  }
+
+  _drawTile(ctx, type, tx, ty, sx, sy, bri) {
+    if (type === WATER) return;
+    let col;
+    if (type === ROCK) col = [70, 72, 84];
+    else if (type === SAND) col = [128, 116, 84];
+    else if (type === CORAL) col = [205, 92, 122];
+    else if (type === GLASS) col = [150, 220, 230];
+    else if (type === VENT) col = [70, 64, 70];
+    else if (type === RUIN) col = [92, 100, 120];
+    else col = [80, 80, 80];
+
+    if (type === ROCK || type === SAND || type === RUIN) {
+      const v = this.chunks.terrain.decoN.hash(tx, ty);
+      ctx.fillStyle = this._shade(col, clamp(bri * (0.85 + v * 0.3), 0, 1));
+      ctx.fillRect(sx, sy, TILE, TILE);
+      if (v > 0.6) { ctx.fillStyle = this._shade(col.map(c => c * 0.6), bri); ctx.fillRect(sx + ((v * 11) | 0) % TILE, sy + ((v * 7) | 0) % TILE, 2, 2); }
+      if (type === RUIN) { ctx.fillStyle = this._shade([30, 34, 44], bri); ctx.fillRect(sx, sy + TILE - 2, TILE, 1); ctx.fillRect(sx + (TILE >> 1), sy, 1, TILE); }
+    } else if (type === CORAL || type === GLASS) {
+      const glow = type === GLASS ? 1 : 0.55;
+      ctx.fillStyle = this._shade(col, clamp(bri + glow * 0.25, 0, 1));
+      const fr = this.chunks.terrain.decoN.hash(tx + 7, ty);
+      for (let i = 0; i < 3; i++) { const fx = sx + 3 + i * 4, fh = 5 + ((fr * (i + 3) * 9) | 0) % 9; ctx.fillRect(fx, sy + TILE - fh, 2, fh); }
+    } else if (type === VENT) {
+      ctx.fillStyle = this._shade(col, clamp(bri + 0.1, 0, 1)); ctx.fillRect(sx + 3, sy + 6, TILE - 6, TILE - 6);
+      const pulse = 0.6 + Math.sin(this.t * 3 + tx) * 0.4;
+      ctx.fillStyle = `rgba(255,140,60,${0.5 + pulse * 0.4})`; ctx.fillRect(sx + (TILE >> 1) - 2, sy + 2, 4, 5);
+    }
+  }
+
+  _drawPOI(ctx, x, y, poi, bri) {
+    x = Math.round(x); y = Math.round(y);
+    ctx.save(); ctx.translate(x, y);
+    if (poi.kind === "bp") {
+      // glowing canister/structure
+      const pulse = 0.5 + Math.sin(this.t * 2.5) * 0.5;
+      ctx.fillStyle = this._shade([90, 100, 120], bri); ctx.fillRect(-6, -8, 12, 16);
+      ctx.fillStyle = `rgba(120,230,255,${0.4 + pulse * 0.5})`; ctx.fillRect(-3, -5, 6, 10);
+      ctx.fillStyle = this._shade([150, 160, 180], bri); ctx.fillRect(-7, -9, 14, 2);
+    } else if (poi.kind === "log") {
+      ctx.fillStyle = this._shade([200, 190, 150], clamp(bri + 0.1, 0, 1)); ctx.fillRect(-4, -5, 8, 10);
+      ctx.fillStyle = this._shade([120, 110, 80], bri); ctx.fillRect(-4, -2, 8, 1); ctx.fillRect(-4, 1, 8, 1);
+    } else if (poi.kind === "wreck") {
+      ctx.fillStyle = this._shade([80, 84, 92], bri);
+      ctx.beginPath(); ctx.ellipse(0, 0, 22, 9, 0.2, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = this._shade([40, 44, 52], bri); ctx.fillRect(-2, -10, 14, 8); // broken open
+      ctx.fillStyle = "rgba(20,24,30,0.9)"; ctx.fillRect(2, -3, 8, 5);
+    } else { // rare phenomenon — distinct per id
+      this._drawPhenomenon(ctx, poi.id, bri);
+    }
+    ctx.restore();
+  }
+  _drawPhenomenon(ctx, id, bri) {
+    const t = this.t;
+    if (id === "sun") { // Black Sun: dark disc with corona
+      const r = 34;
+      const grad = ctx.createRadialGradient(0, 0, r * 0.4, 0, 0, r * 1.6);
+      grad.addColorStop(0, "rgba(0,0,0,1)");
+      grad.addColorStop(0.5, "rgba(60,10,40,0.8)");
+      grad.addColorStop(1, "rgba(120,40,90,0)");
+      ctx.fillStyle = grad; ctx.beginPath(); ctx.arc(0, 0, r * 1.6, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#000"; ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = `rgba(200,80,160,${0.4 + Math.sin(t * 2) * 0.3})`;
+      ctx.beginPath(); ctx.arc(0, 0, r + 2, 0, Math.PI * 2); ctx.stroke();
+    } else if (id === "forest") { // Crystal Forest
+      for (let i = -3; i <= 3; i++) {
+        const h = 18 + ((i * 7 + 21) % 12);
+        ctx.fillStyle = `rgba(140,220,255,${(0.4 + Math.sin(t * 2 + i) * 0.2) * bri + 0.3})`;
+        ctx.beginPath(); ctx.moveTo(i * 7, 0); ctx.lineTo(i * 7 - 3, -h); ctx.lineTo(i * 7 + 3, -h); ctx.closePath(); ctx.fill();
+      }
+    } else if (id === "trench") { // Singing Trench: glowing slit
+      ctx.fillStyle = `rgba(120,255,210,${0.3 + Math.sin(t * 3) * 0.2})`;
+      ctx.fillRect(-3, -30, 6, 60);
+      ctx.fillStyle = "rgba(180,255,230,0.5)"; ctx.fillRect(-1, -30, 2, 60);
+    } else if (id === "island") { // Living Island
+      ctx.fillStyle = this._shade([90, 140, 90], bri);
+      ctx.beginPath(); ctx.ellipse(0, 0, 30, 14, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = this._shade([120, 180, 110], bri);
+      for (let i = -2; i <= 2; i++) ctx.fillRect(i * 9, -10 - (i & 1) * 4, 4, 12);
+    } else if (id === "chasm") { // Endless Chasm
+      const grad = ctx.createLinearGradient(0, -10, 0, 60);
+      grad.addColorStop(0, "rgba(10,10,20,0.2)"); grad.addColorStop(1, "rgba(0,0,0,1)");
+      ctx.fillStyle = grad; ctx.fillRect(-18, -10, 36, 80);
+    }
+  }
+
+  _drawCreature(ctx, x, y, c, bri) {
+    const g = c.arch.glow, col = this._shade(g, bri), s = c.arch.size, dir = c.flip ? -1 : 1;
+    ctx.save(); ctx.translate(Math.round(x), Math.round(y)); ctx.scale(dir, 1);
+    const wob = Math.sin(this.t * 3 + c.phase) * 2; ctx.fillStyle = col;
+    const shape = c.arch.shape;
+    if (shape === "jelly") {
+      ctx.beginPath(); ctx.arc(0, 0, s * 0.5, Math.PI, 0); ctx.fill(); ctx.fillRect(-s * 0.5, 0, s, 2);
+      ctx.strokeStyle = col;
+      for (let i = -2; i <= 2; i++) { ctx.beginPath(); ctx.moveTo(i * s * 0.18, 1); ctx.lineTo(i * s * 0.18 + wob * 0.3, s * 0.8); ctx.stroke(); }
+    } else if (shape === "fish") {
+      ctx.beginPath(); ctx.ellipse(0, 0, s * 0.6, s * 0.35, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(-s * 0.5, 0); ctx.lineTo(-s * 0.9, -s * 0.4 + wob); ctx.lineTo(-s * 0.9, s * 0.4 + wob); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = "rgba(255,255,255,0.5)"; ctx.fillRect(s * 0.3, -s * 0.12, 2, 2);
+    } else if (shape === "ray") {
+      ctx.beginPath(); ctx.moveTo(0, -s * 0.4); ctx.lineTo(s * 0.7, 0); ctx.lineTo(0, s * 0.4); ctx.lineTo(-s * 0.7, 0); ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = col; ctx.beginPath(); ctx.moveTo(-s * 0.6, 0); ctx.lineTo(-s * 1.1, wob); ctx.stroke();
+    } else if (shape === "whale") {
+      ctx.beginPath(); ctx.ellipse(0, 0, s * 0.6, s * 0.3, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(-s * 0.55, 0); ctx.lineTo(-s * 0.85, -s * 0.3 + wob); ctx.lineTo(-s * 0.85, s * 0.3 + wob); ctx.closePath(); ctx.fill();
+    } else if (shape === "eel") {
+      ctx.strokeStyle = col; ctx.lineWidth = Math.max(2, s * 0.18); ctx.beginPath();
+      for (let i = 0; i <= 8; i++) { const px = -s * 0.6 + i * (s * 1.2 / 8), py = Math.sin(this.t * 4 + c.phase + i * 0.7) * s * 0.2; i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py); }
+      ctx.stroke(); ctx.lineWidth = 1; ctx.fillStyle = col; ctx.beginPath(); ctx.arc(s * 0.6, 0, 2, 0, Math.PI * 2); ctx.fill();
+    } else {
+      const r = s * 0.5, grad = ctx.createRadialGradient(0, 0, 0, 0, 0, r);
+      grad.addColorStop(0, `rgba(${g[0]},${g[1]},${g[2]},${0.8 * bri})`); grad.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.fillStyle = grad; ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  _drawSub(ctx, x, y) {
+    const f = this.facing, tint = LIGHT_TINT[this.light] || LIGHT_TINT.blue;
+    ctx.save(); ctx.translate(Math.round(x), Math.round(y)); ctx.scale(f, 1);
+    ctx.fillStyle = "#d8d24a"; ctx.beginPath(); ctx.ellipse(0, 0, 9, 5, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#b8b23a"; ctx.fillRect(-9, 0, 18, 5);
+    ctx.fillStyle = "#9fe7ff"; ctx.beginPath(); ctx.arc(4, -1, 2.4, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#8a8430"; ctx.fillRect(-12, -3, 3, 6);
+    const grad = ctx.createRadialGradient(9, 0, 0, 9, 0, 75);
+    grad.addColorStop(0, `rgba(${tint[0]},${tint[1]},${tint[2]},0.20)`);
+    grad.addColorStop(1, `rgba(${tint[0]},${tint[1]},${tint[2]},0)`);
+    ctx.fillStyle = grad; ctx.beginPath(); ctx.moveTo(8, 0); ctx.arc(9, 0, 75, -0.5, 0.5); ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+
+  /* ---------- DIVE UI ---------- */
+  _drawUI() {
+    const dc = this.renderer.dctx, s = this.renderer.scale, w = W * s, h = H * s;
+    dc.save(); dc.textBaseline = "top";
+
+    // depth
+    dc.font = `bold ${10 * s}px "Courier New",monospace`; dc.textAlign = "right";
+    dc.fillStyle = "rgba(0,0,0,0.5)"; dc.fillText(this.depth + "m", w - 5 * s + 1, h - 14 * s + 1);
+    dc.fillStyle = "#bfe8f0"; dc.fillText(this.depth + "m", w - 5 * s, h - 14 * s);
+
+    // oxygen bubbles
+    const bubbles = Math.ceil(this.oxygen * 5), critical = bubbles <= 1;
+    dc.textAlign = "left";
+    for (let i = 0; i < 5; i++) {
+      const bx = 5 * s + i * 9 * s, by = 5 * s, filled = i < bubbles;
+      let a = filled ? 1 : 0.18; if (critical && filled && Math.sin(this.t * 8) > 0) a = 0.3;
+      dc.beginPath(); dc.arc(bx + 3 * s, by + 3 * s, 3 * s, 0, Math.PI * 2);
+      dc.strokeStyle = `rgba(${critical ? "255,120,120" : "180,230,240"},${a})`; dc.lineWidth = Math.max(1, s); dc.stroke();
+    }
+    // hull + light indicator (top-right small)
+    dc.textAlign = "right"; dc.font = `${8 * s}px "Courier New",monospace`;
+    dc.fillStyle = this.depth > this.upgrades.crushDepth() ? "#ff7a7a" : "#789";
+    dc.fillText("HULL " + HULL_NAMES[this.upgrades.hull] + "  ·  " + this.light.toUpperCase(), w - 5 * s, 6 * s);
+    if (this.depth > this.upgrades.crushDepth()) {
+      dc.fillStyle = `rgba(255,90,90,${0.6 + Math.sin(this.t * 6) * 0.4})`;
+      dc.fillText("WARNING: CRUSH DEPTH", w - 5 * s, 16 * s);
+    }
+    if (this.currentBlocked) {
+      dc.textAlign = "center"; dc.fillStyle = "#bcd"; dc.font = `${9 * s}px "Courier New",monospace`;
+      dc.fillText("Strong current — stronger propeller needed", w / 2, h * 0.18);
+    }
+
+    // popups
+    dc.textAlign = "center";
+    let py = h * 0.30;
+    for (const p of this.popups) {
+      const a = clamp(p.life / 0.8, 0, 1);
+      dc.font = `bold ${13 * s}px "Courier New",monospace`;
+      dc.fillStyle = `rgba(${p.rare ? "255,220,140" : "230,245,250"},${a})`; dc.fillText(p.name, w / 2, py);
+      dc.font = `${8 * s}px "Courier New",monospace`; dc.fillStyle = `rgba(150,180,190,${a})`; dc.fillText(p.sub, w / 2, py + 16 * s);
+      py += 42 * s;
+    }
+    // story lines (bottom center)
+    let sy2 = h * 0.78;
+    for (const sl of this.story_lines) {
+      const a = clamp(sl.life / 1.2, 0, 1);
+      dc.font = `italic ${10 * s}px "Courier New",monospace`; dc.fillStyle = `rgba(200,215,225,${a})`;
+      dc.fillText(sl.line, w / 2, sy2); sy2 += 16 * s;
+    }
+    // reading overlay (logs/wrecks)
+    if (this.reading) {
+      const a = clamp(this.reading.t / 1.2, 0, 1);
+      dc.fillStyle = `rgba(0,0,0,${0.5 * a})`; dc.fillRect(w * 0.15, h * 0.4, w * 0.7, h * 0.2);
+      dc.fillStyle = `rgba(220,210,170,${a})`; dc.font = `bold ${11 * s}px "Courier New",monospace`;
+      dc.fillText(this.reading.title, w / 2, h * 0.43);
+      dc.font = `italic ${10 * s}px "Courier New",monospace`; dc.fillStyle = `rgba(200,200,190,${a})`;
+      dc.fillText("“" + this.reading.text + "”", w / 2, h * 0.49);
+    }
+
+    if (this.showJournal) this._drawJournal(dc, w, h, s);
+    if (this.paused) this._drawPause(dc, w, h, s);
+    if (this.audio.muted) { dc.textAlign = "left"; dc.fillStyle = "#456"; dc.font = `${8 * s}px "Courier New",monospace`; dc.fillText("muted", 5 * s, h - 14 * s); }
+    dc.restore();
+  }
+
+  _drawJournal(dc, w, h, s) {
+    dc.fillStyle = "rgba(4,8,16,0.88)"; dc.fillRect(0, 0, w, h);
+    dc.textAlign = "center"; dc.fillStyle = "#bfe8f0"; dc.font = `bold ${14 * s}px "Courier New",monospace`;
+    dc.fillText("JOURNAL", w / 2, h * 0.07);
+    dc.font = `${9 * s}px "Courier New",monospace`; dc.textAlign = "left";
+    const all = [...this.secured].concat([...this.provisional]);
+    const colX = w * 0.18; let y = h * 0.16, col = 0;
+    for (const name of all) {
+      const prov = this.provisional.has(name);
+      dc.fillStyle = prov ? "#8aa" : "#cfe";
+      dc.fillText((prov ? "~ " : "✓ ") + name, colX + col * w * 0.34, y);
+      y += 15 * s;
+      if (y > h * 0.82) { y = h * 0.16; col++; }
+    }
+    dc.fillStyle = "#456";
+    for (let i = 0; i < 3; i++) { dc.fillText("???", colX + col * w * 0.34, y); y += 15 * s; }
+    dc.textAlign = "center"; dc.fillStyle = "#678"; dc.font = `${8 * s}px "Courier New",monospace`;
+    dc.fillText("~ pending   ✓ secured at surface      press J to close", w / 2, h * 0.92);
+  }
+  _drawPause(dc, w, h, s) {
+    dc.fillStyle = "rgba(0,0,0,0.7)"; dc.fillRect(0, 0, w, h);
+    dc.textAlign = "center"; dc.fillStyle = "#bfe8f0"; dc.font = `bold ${16 * s}px "Courier New",monospace`;
+    dc.fillText("PAUSED", w / 2, h * 0.42);
+    dc.font = `${9 * s}px "Courier New",monospace`; dc.fillStyle = "#789";
+    dc.fillText("max depth " + this.maxDepth + "m", w / 2, h * 0.52);
+    dc.fillText("press ESC to resume", w / 2, h * 0.58);
+  }
+
+  /* ---------- BOAT render ---------- */
+  _renderBoat() {
+    const ctx = this.ctx;
+    // night sky gradient
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, "#0a1426"); g.addColorStop(0.6, "#0d2238"); g.addColorStop(0.62, "#103048"); g.addColorStop(1, "#0a1c2e");
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    // stars
+    const sn = this.chunks.terrain.decoN;
+    for (let i = 0; i < 60; i++) {
+      const x = (i * 53) % W, y = (i * 29) % (H * 0.55);
+      const tw = 0.4 + 0.6 * Math.abs(Math.sin(this.t * 1.5 + i));
+      ctx.fillStyle = `rgba(220,230,255,${0.3 * tw})`; ctx.fillRect(x, y, 1, 1);
+    }
+    // moon
+    ctx.fillStyle = "#cfd8e8"; ctx.beginPath(); ctx.arc(W - 70, 50, 16, 0, Math.PI * 2); ctx.fill();
+    // sea
+    const waveY = H * 0.62;
+    ctx.fillStyle = "#0d2a40"; ctx.fillRect(0, waveY, W, H - waveY);
+    ctx.strokeStyle = "rgba(120,170,200,0.3)";
+    for (let i = 0; i < 5; i++) {
+      ctx.beginPath();
+      for (let x = 0; x <= W; x += 8) ctx.lineTo(x, waveY + 6 + i * 14 + Math.sin(x * 0.06 + this.t * 1.2 + i) * 2.5);
+      ctx.stroke();
+    }
+    // boat
+    const bx = W / 2, by = waveY;
+    ctx.fillStyle = "#3a2a1c"; ctx.beginPath();
+    ctx.moveTo(bx - 46, by); ctx.lineTo(bx + 46, by); ctx.lineTo(bx + 34, by + 16); ctx.lineTo(bx - 34, by + 16); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = "#5a4530"; ctx.fillRect(bx - 8, by - 26, 4, 26); // mast
+    ctx.fillStyle = "#caa05a"; ctx.beginPath(); ctx.moveTo(bx - 6, by - 24); ctx.lineTo(bx + 16, by - 14); ctx.lineTo(bx - 6, by - 6); ctx.closePath(); ctx.fill();
+    // warm lantern glow
+    const lg = ctx.createRadialGradient(bx + 14, by - 4, 0, bx + 14, by - 4, 40);
+    lg.addColorStop(0, "rgba(255,200,120,0.35)"); lg.addColorStop(1, "rgba(255,200,120,0)");
+    ctx.fillStyle = lg; ctx.beginPath(); ctx.arc(bx + 14, by - 4, 40, 0, Math.PI * 2); ctx.fill();
+
+    this.renderer.present();
+    this._drawBoatUI();
+  }
+  _drawBoatUI() {
+    const dc = this.renderer.dctx, s = this.renderer.scale, w = W * s, h = H * s;
+    dc.save(); dc.textBaseline = "top"; dc.textAlign = "center";
+    dc.fillStyle = "#dce8f0"; dc.font = `bold ${15 * s}px "Courier New",monospace`;
+    dc.fillText("ENDLESS DESCENT", w / 2, h * 0.06);
+    dc.font = `${9 * s}px "Courier New",monospace`; dc.fillStyle = "#8aa6b4";
+    dc.fillText("max depth " + this.maxDepth + "m", w / 2, h * 0.14);
+
+    // three station panels
+    const labels = [
+      ["1", "WORKSHOP", this.upgrades.pending().length ? this.upgrades.pending().length + " blueprint(s) ready" : "all installed"],
+      ["2", "JOURNAL", "your discoveries"],
+      ["3", "DIVE", "descend"],
+    ];
+    const pw = w * 0.26, gap = w * 0.04, total = pw * 3 + gap * 2, x0 = (w - total) / 2, py = h * 0.34, ph = h * 0.26;
+    for (let i = 0; i < 3; i++) {
+      const x = x0 + i * (pw + gap);
+      dc.fillStyle = "rgba(20,40,58,0.85)"; dc.fillRect(x, py, pw, ph);
+      dc.strokeStyle = "#3a6076"; dc.lineWidth = Math.max(1, s); dc.strokeRect(x, py, pw, ph);
+      dc.fillStyle = "#9fd4e8"; dc.font = `bold ${20 * s}px "Courier New",monospace`; dc.fillText(labels[i][0], x + pw / 2, py + ph * 0.14);
+      dc.fillStyle = "#dce8f0"; dc.font = `bold ${11 * s}px "Courier New",monospace`; dc.fillText(labels[i][1], x + pw / 2, py + ph * 0.5);
+      dc.fillStyle = "#7a98a6"; dc.font = `${8 * s}px "Courier New",monospace`; dc.fillText(labels[i][2], x + pw / 2, py + ph * 0.72);
+    }
+    // current upgrade status line
+    const u = this.upgrades;
+    dc.fillStyle = "#8aa6b4"; dc.font = `${8 * s}px "Courier New",monospace`;
+    dc.fillText(`Hull ${HULL_NAMES[u.hull]} (${u.crushDepth()}m) · O2 lv${u.oxygen} · Sonar lv${u.sonar} · Prop lv${u.propeller} · Lights ${u.lights.join("/")}`, w / 2, py + ph + 14 * s);
+    if (this.boatMsg) { dc.fillStyle = "#cfe8a0"; dc.font = `${9 * s}px "Courier New",monospace`; dc.fillText(this.boatMsg, w / 2, py + ph + 30 * s); }
+
+    if (this.showJournal) this._drawJournal(dc, w, h, s);
+    dc.restore();
+  }
+
+  /* ---------- IMPLODE / ENDING render ---------- */
+  _renderImplode() {
+    const dc = this.renderer.dctx, s = this.renderer.scale, w = W * s, h = H * s;
+    const a = clamp(this.implodeT / 0.6, 0, 1);
+    dc.fillStyle = `rgba(0,0,0,${a * 0.95})`; dc.fillRect(0, 0, w, h);
+    if (this.implodeT > 0.8) {
+      dc.save(); dc.textAlign = "center"; dc.textBaseline = "middle";
+      dc.fillStyle = `rgba(220,80,80,${clamp((this.implodeT - 0.8) * 2, 0, 1)})`;
+      dc.font = `bold ${14 * s}px "Courier New",monospace`; dc.fillText("HULL BREACH", w / 2, h / 2);
+      dc.restore();
+    }
+  }
+  _renderEnding() {
+    const dc = this.renderer.dctx, s = this.renderer.scale, w = W * s, h = H * s;
+    const fade = clamp(this.endingT / 5, 0, 1);
+    dc.fillStyle = `rgba(2,4,10,${fade})`; dc.fillRect(0, 0, w, h);
+    const lines = [
+      "The ocean has a bottom.",
+      "No boss. No answer.",
+      "Only arrival.",
+      "",
+      "The journey itself is the reward.",
+    ];
+    dc.save(); dc.textAlign = "center"; dc.textBaseline = "middle";
+    for (let i = 0; i < lines.length; i++) {
+      const at = 4 + i * 2.2;
+      const a = clamp((this.endingT - at) / 1.5, 0, 1) * fade;
+      if (a <= 0) continue;
+      dc.fillStyle = `rgba(220,230,240,${a})`;
+      dc.font = `${(i === 4 ? 13 : 11) * s}px "Courier New",monospace`;
+      dc.fillText(lines[i], w / 2, h * 0.4 + i * 22 * s);
+    }
+    dc.restore();
+  }
+  _renderEndScreen() {
+    const dc = this.renderer.dctx, s = this.renderer.scale, w = W * s, h = H * s;
+    dc.fillStyle = "#02040a"; dc.fillRect(0, 0, w, h);
+    dc.save(); dc.textAlign = "center"; dc.textBaseline = "middle";
+    dc.fillStyle = "#dce8f0"; dc.font = `bold ${14 * s}px "Courier New",monospace`;
+    dc.fillText("THE JOURNEY IS COMPLETE", w / 2, h * 0.42);
+    dc.fillStyle = "#7a98a6"; dc.font = `${9 * s}px "Courier New",monospace`;
+    dc.fillText("reached " + this.maxDepth + "m  ·  " + this.secured.size + " discoveries", w / 2, h * 0.52);
+    dc.fillStyle = "#566"; dc.font = `${8 * s}px "Courier New",monospace`;
+    dc.fillText("press any key to wander the boat", w / 2, h * 0.62);
+    dc.restore();
+  }
+}
+
+new Game();
+})();
+</script>
+</body>
+</html>
