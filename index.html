@@ -186,16 +186,16 @@ const ARCHETYPES = [
 /* ---------- Points of interest: blueprints / logs / wrecks / rare phenomena ----------
    Placed deterministically in the open channel at their depth, so always reachable. */
 const POIS = [
-  { id: "valve",   name: "Pressure Valve",      depth: 250,   kind: "bp", apply: u => u.hull = Math.max(u.hull, 1) },
-  { id: "oxy",     name: "Oxygen Recycler",     depth: 900,   kind: "bp", apply: u => u.oxygen = Math.max(u.oxygen, 1) },
-  { id: "crystal", name: "Sonar Crystal",       depth: 1300,  kind: "bp", apply: u => u.sonar = Math.max(u.sonar, 1) },
-  { id: "plating", name: "Reinforced Plating",  depth: 1400,  kind: "bp", apply: u => u.hull = Math.max(u.hull, 2) },
-  { id: "rotor",   name: "Current Rotor",       depth: 1800,  kind: "bp", apply: u => u.propeller = Math.max(u.propeller, 1) },
-  { id: "redlamp", name: "Red Lamp Filter",     depth: 2500,  kind: "bp", apply: u => { if (!u.lights.includes("red")) u.lights.push("red"); } },
-  { id: "turbine", name: "Turbine Core",        depth: 3500,  kind: "bp", apply: u => u.propeller = Math.max(u.propeller, 2) },
-  { id: "alloy",   name: "Unknown Alloy",       depth: 3800,  kind: "bp", apply: u => u.hull = Math.max(u.hull, 3) },
-  { id: "bacteria",name: "Bioluminescent Bacteria", depth: 8000, kind: "bp", apply: u => { if (!u.lights.includes("uv")) u.lights.push("uv"); u.oxygen = Math.max(u.oxygen, 2); } },
-  { id: "core",    name: "Abyssal Core",        depth: 8500,  kind: "bp", apply: u => u.hull = Math.max(u.hull, 4) },
+  { id: "valve",   name: "Pressure Valve",      depth: 250,   kind: "artifact" },
+  { id: "oxy",     name: "Oxygen Recycler",     depth: 900,   kind: "artifact" },
+  { id: "crystal", name: "Sonar Crystal",       depth: 1300,  kind: "artifact" },
+  { id: "plating", name: "Reinforced Plating",  depth: 1400,  kind: "artifact" },
+  { id: "rotor",   name: "Current Rotor",       depth: 1800,  kind: "artifact" },
+  { id: "redlamp", name: "Red Lamp Filter",     depth: 2500,  kind: "artifact" },
+  { id: "turbine", name: "Turbine Core",        depth: 3500,  kind: "artifact" },
+  { id: "alloy",   name: "Unknown Alloy",       depth: 3800,  kind: "artifact" },
+  { id: "bacteria",name: "Bioluminescent Bacteria", depth: 8000, kind: "artifact" },
+  { id: "core",    name: "Abyssal Core",        depth: 8500,  kind: "artifact" },
   // story logs (hint nearby blueprint depths on the map/depth-strip)
   { id: "log1", name: "Old Dive Log",        depth: 1600, kind: "log", text: "Day 40. The valves hold. The deep hums to me at night.", hints: ["rotor", "redlamp"] },
   { id: "log2", name: "Torn Journal Page",   depth: 4200, kind: "log", text: "We were not the first. Lights below that answer ours.", hints: ["turbine", "alloy"] },
@@ -373,7 +373,7 @@ class Input {
   constructor() {
     this.keys = {}; this.pressed = {}; this.clickPt = null;
     addEventListener("keydown", e => {
-      if (["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.code)) e.preventDefault();
+      if (e.code === "Space") e.preventDefault();
       if (!this.keys[e.code]) this.pressed[e.code] = true;
       this.keys[e.code] = true;
     });
@@ -426,7 +426,11 @@ class SonarSystem {
   clear() { this.reveal.clear(); this.rings.length = 0; }
 }
 
-/* ---------- Upgrades ---------- */
+/* ---------- Upgrades: bought with XP at the workshop ---------- */
+const HULL_COST = [0, 180, 500, 1300, 3000];               // cost to reach tier i (i=1..4)
+const TRACK_COST = { oxygen: 150, sonar: 150, propeller: 170 }; // cost(level) = base*(level+1)
+const LIGHT_COST = { red: 300, uv: 900 };
+
 class UpgradeSystem {
   constructor(s) {
     s = s || {};
@@ -435,25 +439,16 @@ class UpgradeSystem {
     this.sonar = s.sonar || 0;
     this.propeller = s.propeller || 0;
     this.lights = s.lights || ["blue"];
-    this.unlocked = new Set(s.unlocked || []);   // blueprint ids available at workshop
-    this.applied = new Set(s.applied || []);     // already installed
   }
   crushDepth() { return CRUSH[this.hull]; }
   oxygenCap() { return 1 + this.oxygen * 0.8; }
   sonarRange() { return 230 + this.sonar * 130; }
   sonarFade() { return Math.max(0.12, 0.35 - this.sonar * 0.07); }
   propPower() { return 1 + this.propeller; }
-  pending() { return [...this.unlocked].filter(id => !this.applied.has(id)); }
-  apply(id) {
-    if (this.applied.has(id) || !this.unlocked.has(id)) return null;
-    const p = POI_BY_ID[id]; if (!p || !p.apply) return null;
-    p.apply(this); this.applied.add(id);
-    return p.name;
-  }
   serialize() {
     return {
       hull: this.hull, oxygen: this.oxygen, sonar: this.sonar, propeller: this.propeller,
-      lights: this.lights, unlocked: [...this.unlocked], applied: [...this.applied],
+      lights: this.lights,
     };
   }
 }
@@ -464,9 +459,11 @@ class XPSystem {
     s = s || {};
     this.xp = s.xp || 0;
     this.level = s.level || 0;
+    this.bank = s.bank || 0;   // spendable currency for ship upgrades, never drained by leveling
   }
   static thresh(level) { return 50 + level * 75; }
   add(amount) {
+    this.bank += amount;
     this.xp += amount;
     let leveled = false;
     while (this.xp >= XPSystem.thresh(this.level)) {
@@ -475,10 +472,11 @@ class XPSystem {
     }
     return leveled;
   }
+  spend(cost) { if (this.bank < cost) return false; this.bank -= cost; return true; }
   oxygenMult() { return 1 + Math.min(0.3, this.level * 0.02); }
   lightMult() { return 1 + Math.min(0.25, Math.floor(this.level / 2) * 0.03); }
   sonarFadeMult() { return Math.max(0.7, 1 - this.level * 0.015); }
-  serialize() { return { xp: this.xp, level: this.level }; }
+  serialize() { return { xp: this.xp, level: this.level, bank: this.bank }; }
 }
 
 /* ---------- Audio (procedural WebAudio, no assets) ---------- */
@@ -605,6 +603,11 @@ class Game {
     this.hintedDepths = new Set((s && s.hintedDepths) || []);
     this.visitedChunks = new Set((s && s.visited) || []);
     this.storyStage = (s && s.stage) || 0;
+    this.introSeen = !!(s && s.introSeen);
+    this.distanceTraveled = (s && s.distanceTraveled) || 0;
+    this.depthBand = (s && s.depthBand) || 0;
+    this.distanceBand = (s && s.distanceBand) || 0;
+    this.speciesSeen = new Map(Object.entries((s && s.speciesSeen) || {}));
 
     this.input = new Input();
     this.renderer = new Renderer(document.getElementById("screen"));
@@ -615,7 +618,6 @@ class Game {
     this.audio = new AudioSystem();
 
     this.provisional = new Set();   // discovery names pending until surfaced
-    this.provUnlocks = new Set();   // blueprint ids pending until surfaced
     this.popups = [];               // {name, sub, life, rare}
     this.story_lines = [];          // narrative beats {line, life}
     this.reading = null;            // {title, text, t}
@@ -623,7 +625,7 @@ class Game {
     this.light = this.upgrades.lights[0] || "blue";
     this.t = 0; this.saveTimer = 0;
 
-    this.mode = this.ended ? "ENDING" : "BOAT";
+    this.mode = this.ended ? "ENDING" : (this.introSeen ? "DIVE" : "BOAT");
     this.endDone = this.ended;      // reloaded into a finished game
     this.endingT = this.ended ? 99 : 0;
     this.implodeT = 0;
@@ -649,9 +651,9 @@ class Game {
   _updateHint() {
     const h = document.getElementById("hint");
     if (this.mode === "DIVE")
-      h.textContent = "WASD move · SPACE sonar · SHIFT boost · 1/2/3 lights · J journal (TAB map) · M mute · ESC pause · R restart";
+      h.textContent = "WASD move · SPACE sonar · SHIFT boost · 1/2/3 lights · J journal · M map · E workshop (surface only) · N mute · ESC pause · R restart";
     else if (this.mode === "BOAT")
-      h.textContent = "click WORKSHOP (or W) to upgrade · SPACE to dive · M mute · R restart";
+      h.textContent = "click WORKSHOP (or E) to upgrade · SPACE to dive · N mute · R restart";
     else h.textContent = "R restart";
   }
 
@@ -673,9 +675,8 @@ class Game {
     const p = s.poi;
     if (this.secured.has(p.name) || this.provisional.has(p.name)) return;
     if (p.hints) for (const id of p.hints) this.hintedDepths.add(id);
-    if (p.kind === "bp") {
-      this.provUnlocks.add(p.id);
-      this.discover(p.name, false, "Blueprint recovered", 25);
+    if (p.kind === "artifact") {
+      this.discover(p.name, false, "Salvaged", 30);
     } else if (p.kind === "log" || p.kind === "wreck") {
       this.discover(p.name, false, "Logged", 15);
       this.reading = { title: p.name, text: p.text, t: 5 };
@@ -687,12 +688,34 @@ class Game {
     }
   }
 
+  /* ---------- XP from recapturing a known species, and from depth/distance milestones ---------- */
+  static SPECIES_MILESTONES = [10, 50, 200, 500];
+  static SPECIES_REWARDS = [40, 120, 300, 700];
+  _trackSpeciesEncounter(name) {
+    let rec = this.speciesSeen.get(name);
+    if (!rec) { rec = { count: 0, idx: 0 }; this.speciesSeen.set(name, rec); }
+    rec.count++;
+    if (rec.idx < Game.SPECIES_MILESTONES.length && rec.count >= Game.SPECIES_MILESTONES[rec.idx]) {
+      this.popups.push({ name: "Familiar face", sub: name + " x" + rec.count, life: 3.4, rare: false });
+      this.audio.chime();
+      this._gainXP(Game.SPECIES_REWARDS[rec.idx]);
+      rec.idx++;
+    }
+  }
+  _awardBand(current, bandSize, reward, field) {
+    const band = Math.floor(current / bandSize);
+    if (band > this[field]) {
+      this._gainXP(reward * (band - this[field]));
+      this[field] = band;
+    }
+  }
+
   /* ---------- main loop ---------- */
   _loop(now) {
     let dt = (now - this.last) / 1000; this.last = now;
     if (dt > 0.05) dt = 0.05;
     if (this.input.any()) this.audio.ensure();
-    if (this.input.take("KeyM")) this.audio.toggleMute();
+    if (this.input.take("KeyN")) this.audio.toggleMute();
     if (this.restartArm > 0) {
       this.restartArm -= dt;
       if (this.input.take("KeyR")) this._restart();
@@ -720,37 +743,53 @@ class Game {
     return { x: W * 0.5 - 36, y: H * 0.16, w: 72, h: 16 };
   }
   _workshopRows() {
-    const pend = this.upgrades.pending();
+    const u = this.upgrades, items = [];
+    if (u.hull < 4) items.push({ key: "hull", label: "Hull " + HULL_NAMES[u.hull + 1], cost: HULL_COST[u.hull + 1] });
+    items.push({ key: "oxygen", label: "Oxygen Recycler lv" + (u.oxygen + 1), cost: TRACK_COST.oxygen * (u.oxygen + 1) });
+    items.push({ key: "sonar", label: "Sonar Crystal lv" + (u.sonar + 1), cost: TRACK_COST.sonar * (u.sonar + 1) });
+    items.push({ key: "propeller", label: "Current Rotor lv" + (u.propeller + 1), cost: TRACK_COST.propeller * (u.propeller + 1) });
+    if (!u.lights.includes("red")) items.push({ key: "red", label: "Red Lamp Filter", cost: LIGHT_COST.red });
+    if (!u.lights.includes("uv")) items.push({ key: "uv", label: "Bioluminescent Bacteria (UV)", cost: LIGHT_COST.uv });
     const x = W * 0.18, w = W * 0.64, rowH = 14, y0 = H * 0.28;
-    return pend.map((id, i) => ({ id, x, y: y0 + i * rowH, w, h: rowH - 2 }));
+    return items.map((it, i) => ({ ...it, x, y: y0 + i * rowH, w, h: rowH - 2 }));
   }
   _diveBoatRect() {
     return { x: W / 2 - 50, y: H * 0.62 - 30, w: 100, h: 50 };
   }
-  _installOne(id) {
-    const name = this.upgrades.apply(id);
-    if (name) { this.boatMsg = "Installed: " + name; this._save(); this.audio.chime(); }
+  _installOne(row) {
+    if (!this.xp.spend(row.cost)) return;
+    const u = this.upgrades;
+    if (row.key === "hull") u.hull++;
+    else if (row.key === "oxygen") u.oxygen++;
+    else if (row.key === "sonar") u.sonar++;
+    else if (row.key === "propeller") u.propeller++;
+    else if (row.key === "red") u.lights.push("red");
+    else if (row.key === "uv") u.lights.push("uv");
+    this.popups.push({ name: "Installed", sub: row.label, life: 3, rare: false });
+    this._save(); this.audio.chime();
   }
   _diveNow() {
     this.showWorkshop = false; this.boatMsg = "";
-    this.mode = "DIVE"; this._resetDiveVars(); this._updateHint();
+    this.introSeen = true;
+    this.mode = "DIVE"; this._resetDiveVars(); this._updateHint(); this._save();
+  }
+  _handleWorkshopClick(click) {
+    let hit = false;
+    for (const r of this._workshopRows())
+      if (click.x >= r.x && click.x <= r.x + r.w && click.y >= r.y && click.y <= r.y + r.h) { if (this.xp.bank >= r.cost) this._installOne(r); hit = true; }
+    const bw = { x: W * 0.14, y: H * 0.22, w: W * 0.72, h: H * 0.58 };
+    if (!hit && !(click.x >= bw.x && click.x <= bw.x + bw.w && click.y >= bw.y && click.y <= bw.y + bw.h)) this.showWorkshop = false;
   }
   _updateBoat(dt) {
     const inp = this.input;
     if (this.showWorkshop) {
       if (inp.take("Escape")) { this.showWorkshop = false; return; }
       const click = inp.takeClick();
-      if (click) {
-        let hit = false;
-        for (const r of this._workshopRows())
-          if (click.x >= r.x && click.x <= r.x + r.w && click.y >= r.y && click.y <= r.y + r.h) { this._installOne(r.id); hit = true; }
-        const bw = { x: W * 0.14, y: H * 0.22, w: W * 0.72, h: H * 0.58 };
-        if (!hit && !(click.x >= bw.x && click.x <= bw.x + bw.w && click.y >= bw.y && click.y <= bw.y + bw.h)) this.showWorkshop = false;
-      }
+      if (click) this._handleWorkshopClick(click);
       return;
     }
     if (inp.take("Enter") || inp.take("Space")) { this._diveNow(); return; }
-    if (inp.take("KeyW")) { this.showWorkshop = true; return; }
+    if (inp.take("KeyE")) { this.showWorkshop = true; return; }
     const click = inp.takeClick();
     if (click) {
       const wr = this._workshopButtonRect();
@@ -763,9 +802,17 @@ class Game {
   /* ---------- DIVE ---------- */
   _updateDive(dt) {
     const inp = this.input;
+    if (inp.take("KeyE") && this.depth === 0) this.showWorkshop = !this.showWorkshop;   // disabled while submerged
+    if (this.showWorkshop) {
+      if (inp.take("Escape")) this.showWorkshop = false;
+      const click = inp.takeClick();
+      if (click) this._handleWorkshopClick(click);
+      this.sonar.update(0, this.upgrades.sonarFade() * this.xp.sonarFadeMult());
+      return;
+    }
     if (inp.take("Escape")) { this.paused = !this.paused; }
-    if (inp.take("KeyJ")) this.showJournal = !this.showJournal;
-    if (inp.take("Tab") && this.showJournal) this.journalTab = this.journalTab === "map" ? "log" : "map";
+    if (inp.take("KeyJ")) { if (this.showJournal && this.journalTab === "log") this.showJournal = false; else { this.showJournal = true; this.journalTab = "log"; } }
+    if (inp.take("KeyM")) { if (this.showJournal && this.journalTab === "map") this.showJournal = false; else { this.showJournal = true; this.journalTab = "map"; } }
     if (this.paused || this.showJournal) { this.sonar.update(0, this.upgrades.sonarFade() * this.xp.sonarFadeMult()); return; }
 
     // light selection
@@ -773,15 +820,15 @@ class Game {
     if (inp.take("Digit2") && this.upgrades.lights.includes("red")) this.light = "red";
     if (inp.take("Digit3") && this.upgrades.lights.includes("uv")) this.light = "uv";
 
-    // movement
+    // movement (WASD only)
     const boosting = inp.down("ShiftLeft") || inp.down("ShiftRight");
     const boost = boosting ? 1.9 : 1;
     const acc = 520 * boost;
     let ax = 0, ay = 0, moving = false;
-    if (inp.down("KeyA") || inp.down("ArrowLeft")) { ax -= acc; this.facing = -1; moving = true; }
-    if (inp.down("KeyD") || inp.down("ArrowRight")) { ax += acc; this.facing = 1; moving = true; }
-    if (inp.down("KeyW") || inp.down("ArrowUp")) { ay -= acc; moving = true; }
-    if (inp.down("KeyS") || inp.down("ArrowDown")) { ay += acc; moving = true; }
+    if (inp.down("KeyA")) { ax -= acc; this.facing = -1; moving = true; }
+    if (inp.down("KeyD")) { ax += acc; this.facing = 1; moving = true; }
+    if (inp.down("KeyW")) { ay -= acc; moving = true; }
+    if (inp.down("KeyS")) { ay += acc; moving = true; }
     this.audio.setThruster(moving);
     this.vx += ax * dt; this.vy += ay * dt;
     const drag = Math.pow(0.0025, dt);
@@ -830,8 +877,10 @@ class Game {
     } else this.pressure = Math.max(0, this.pressure - dt * 0.25);
 
     this.audio.setDepth(this.depth);
-    if (this.depth > this.maxDepth) this.maxDepth = this.depth;
+    if (this.depth > this.maxDepth) { this.maxDepth = this.depth; this._awardBand(this.maxDepth, 100, 15, "depthBand"); }
     if (this.depth > this.diveMax) this.diveMax = this.depth;
+    this.distanceTraveled += Math.hypot(this.vx, this.vy) * dt;
+    this._awardBand(this.distanceTraveled, 400, 8, "distanceBand");
     this.visitedChunks.add(Math.floor(this.px / CHUNK_PX) + "," + Math.floor(this.py / CHUNK_PX));
     while (this.storyStage < STAGES.length - 1 && this.depth >= STAGE_DEPTHS[this.storyStage + 1]) this.storyStage++;
 
@@ -864,14 +913,12 @@ class Game {
 
   _dock() {
     for (const n of this.provisional) this.secured.add(n);
-    for (const id of this.provUnlocks) this.upgrades.unlocked.add(id);
-    const got = this.provUnlocks.size;
-    this.provisional.clear(); this.provUnlocks.clear();
+    this.provisional.clear();
+    this.oxygen = 1;
     this._save();
     this.audio.setThruster(false);
-    this.mode = "BOAT"; this.showJournal = false; this.paused = false;
-    this.boatMsg = got ? "Surfaced. " + got + " blueprint(s) ready to install (press 1)." : "Surfaced safely.";
-    this._updateHint();
+    this.paused = false;
+    this.popups.push({ name: "Surfaced", sub: "Oxygen refilled.", life: 3, rare: false });
   }
 
   _restart() {
@@ -879,22 +926,24 @@ class Game {
     this.restartArm = 0;
     this.seed = Math.floor(Math.random() * 1e9) | 0;
     this.maxDepth = 0;
-    this.secured.clear(); this.story.clear(); this.provisional.clear(); this.provUnlocks.clear();
+    this.secured.clear(); this.story.clear(); this.provisional.clear();
     this.popups = []; this.story_lines = []; this.reading = null;
     this.ended = false; this.endDone = false; this.endingT = 0; this.implodeT = 0;
     this.upgrades = new UpgradeSystem(null);
     this.xp = new XPSystem(null);
     this.hintedDepths = new Set(); this.visitedChunks = new Set(); this.storyStage = 0;
+    this.introSeen = false; this.distanceTraveled = 0; this.depthBand = 0; this.distanceBand = 0;
+    this.speciesSeen = new Map();
     this.light = this.upgrades.lights[0] || "blue";
     this.chunks = new ChunkManager(this.seed);
     this.audio.setThruster(false);
-    this.mode = "BOAT"; this.showJournal = false; this.paused = false;
+    this.mode = "BOAT"; this.showJournal = false; this.showWorkshop = false; this.paused = false;
     this.boatMsg = "Restarted. A new ocean awaits.";
     this._resetDiveVars();
     this._updateHint();
   }
   _implode() {
-    this.provisional.clear(); this.provUnlocks.clear();   // unsecured progress lost
+    this.provisional.clear();   // unsecured discoveries this dive are lost
     this.audio.setThruster(false); this.audio.implosion();
     this.mode = "IMPLODE"; this.implodeT = 0; this._save();
     this._updateHint();
@@ -902,8 +951,8 @@ class Game {
   _updateImplode(dt) {
     this.implodeT += dt;
     if (this.implodeT > 2.4) {
-      this.mode = "BOAT"; this._resetDiveVars();
-      this.boatMsg = "Hull failed at " + this.maxDepth + "m. You were pulled back to the boat.";
+      this.mode = "DIVE"; this._resetDiveVars();
+      this.popups.push({ name: "Hull failed", sub: "at " + this.maxDepth + "m. Pulled back to the surface.", life: 4, rare: true });
       this._updateHint();
     }
   }
@@ -912,15 +961,14 @@ class Game {
     if (this.mode === "ENDING") return;
     this.mode = "ENDING"; this.endingT = 0; this.ended = true; this.endDone = false;
     for (const n of this.provisional) this.secured.add(n);
-    for (const id of this.provUnlocks) this.upgrades.unlocked.add(id);
-    this.provisional.clear(); this.provUnlocks.clear();
+    this.provisional.clear();
     this.audio.setThruster(false); this.audio.swell();
     this._save();
     this._updateHint();
   }
   _updateEnding(dt) {
     this.endingT += dt;
-    if (this.endDone) { if (this.input.any()) { this.mode = "BOAT"; this._updateHint(); } return; }
+    if (this.endDone) { if (this.input.any()) { this.mode = "DIVE"; this._resetDiveVars(); this._updateHint(); } return; }
     if (this.endingT > 32) this.endDone = true;
   }
 
@@ -931,6 +979,9 @@ class Game {
       upgrades: this.upgrades.serialize(), ending: this.ended,
       xp: this.xp.serialize(), hintedDepths: [...this.hintedDepths],
       visited: [...this.visitedChunks], stage: this.storyStage,
+      introSeen: this.introSeen, distanceTraveled: this.distanceTraveled,
+      depthBand: this.depthBand, distanceBand: this.distanceBand,
+      speciesSeen: Object.fromEntries(this.speciesSeen),
     });
   }
 
@@ -953,8 +1004,11 @@ class Game {
       const dx = c.x - this.px, dy = c.y - this.py, d = Math.sqrt(dx * dx + dy * dy);
       if (d < 90) {
         const tx = Math.floor(c.x / TILE), ty = Math.floor(c.y / TILE);
-        if (this._brightness(tx, ty) > 0.28) this.discover(c.arch.name);
-      }
+        if (this._brightness(tx, ty) > 0.28) {
+          if (!c._encountered) { c._encountered = true; this._trackSpeciesEncounter(c.arch.name); }
+          this.discover(c.arch.name);
+        }
+      } else c._encountered = false;   // reset once it drifts out of range, so the next approach counts again
     });
   }
   _scanFeatures() {
@@ -1312,6 +1366,13 @@ class Game {
       dc.fillText("“" + this.reading.text + "”", w / 2, h * 0.49);
     }
 
+    // surfaced: workshop is reachable here, locked while submerged
+    if (this.depth === 0 && !this.showWorkshop && !this.showJournal && !this.paused) {
+      dc.textAlign = "center"; dc.fillStyle = `rgba(220,235,245,${0.6 + Math.sin(this.t * 2) * 0.2})`;
+      dc.font = `${9 * s}px "Courier New",monospace`;
+      dc.fillText("[E] workshop (" + this.xp.bank + " XP)", w / 2, h * 0.20);
+    }
+    if (this.showWorkshop) this._drawWorkshop(dc, w, h, s);
     if (this.showJournal) this._drawJournal(dc, w, h, s);
     if (this.paused) this._drawPause(dc, w, h, s);
     if (this.audio.muted) { dc.textAlign = "left"; dc.fillStyle = "#456"; dc.font = `${8 * s}px "Courier New",monospace`; dc.fillText("muted", 5 * s, h - 14 * s); }
@@ -1336,7 +1397,7 @@ class Game {
     dc.fillStyle = "#456";
     for (let i = 0; i < 3; i++) { dc.fillText("???", colX + col * w * 0.34, y); y += 15 * s; }
     dc.textAlign = "center"; dc.fillStyle = "#678"; dc.font = `${8 * s}px "Courier New",monospace`;
-    dc.fillText("~ pending   ✓ secured at surface      TAB for map      press J to close", w / 2, h * 0.92);
+    dc.fillText("~ pending   ✓ secured at surface      M for map      press J to close", w / 2, h * 0.92);
   }
   _drawJournalMap(dc, w, h, s) {
     dc.textAlign = "center"; dc.fillStyle = "#bfe8f0"; dc.font = `bold ${14 * s}px "Courier New",monospace`;
@@ -1364,7 +1425,7 @@ class Game {
     dc.fillStyle = "#e8d68a"; dc.font = `bold ${9 * s}px "Courier New",monospace`;
     dc.fillText(this.maxDepth + "m max", colX, top - 4 * s);
     dc.textAlign = "center"; dc.fillStyle = "#678"; dc.font = `${8 * s}px "Courier New",monospace`;
-    dc.fillText("lit = visited   gold = found   faint gold = hinted      TAB for log      press J to close", w / 2, h * 0.92);
+    dc.fillText("lit = visited   gold = found   faint gold = hinted      J for log      press M to close", w / 2, h * 0.92);
   }
   _drawPause(dc, w, h, s) {
     dc.fillStyle = "rgba(0,0,0,0.7)"; dc.fillRect(0, 0, w, h);
@@ -1422,15 +1483,16 @@ class Game {
     dc.font = `${9 * s}px "Courier New",monospace`; dc.fillStyle = "#8aa6b4";
     dc.fillText("max depth " + this.maxDepth + "m", w / 2, h * 0.105);
 
-    // single workshop button — dimmed/absent while diving (this is boat-only draw), lit here
-    const pend = this.upgrades.pending();
+    // single workshop button — lit when the player can afford something
+    const rows = this._workshopRows();
+    const afford = rows.some(r => this.xp.bank >= r.cost);
     const wr = this._workshopButtonRect();
-    dc.fillStyle = pend.length ? "rgba(40,80,60,0.85)" : "rgba(30,40,50,0.6)";
+    dc.fillStyle = afford ? "rgba(40,80,60,0.85)" : "rgba(30,40,50,0.6)";
     dc.fillRect(wr.x * s, wr.y * s, wr.w * s, wr.h * s);
-    dc.strokeStyle = pend.length ? "#5ac88a" : "#3a5060"; dc.lineWidth = Math.max(1, s);
+    dc.strokeStyle = afford ? "#5ac88a" : "#3a5060"; dc.lineWidth = Math.max(1, s);
     dc.strokeRect(wr.x * s, wr.y * s, wr.w * s, wr.h * s);
-    dc.fillStyle = pend.length ? "#cfe8a0" : "#7a98a6"; dc.font = `bold ${9 * s}px "Courier New",monospace`;
-    dc.fillText("WORKSHOP" + (pend.length ? " (" + pend.length + ")" : ""), wr.x * s + wr.w * s / 2, wr.y * s + 3 * s);
+    dc.fillStyle = afford ? "#cfe8a0" : "#7a98a6"; dc.font = `bold ${9 * s}px "Courier New",monospace`;
+    dc.fillText("WORKSHOP (" + this.xp.bank + " XP)", wr.x * s + wr.w * s / 2, wr.y * s + 3 * s);
 
     // current upgrade status line
     const u = this.upgrades;
@@ -1452,21 +1514,24 @@ class Game {
     dc.fillStyle = "rgba(6,14,22,0.92)"; dc.fillRect(bw.x * s, bw.y * s, bw.w * s, bw.h * s);
     dc.strokeStyle = "#3a6076"; dc.lineWidth = Math.max(1, s); dc.strokeRect(bw.x * s, bw.y * s, bw.w * s, bw.h * s);
     dc.textAlign = "center"; dc.fillStyle = "#9fd4e8"; dc.font = `bold ${11 * s}px "Courier New",monospace`;
-    dc.fillText("WORKSHOP — pick one to install", w / 2, bw.y * s + 5 * s);
+    dc.fillText("WORKSHOP — " + this.xp.bank + " XP available", w / 2, bw.y * s + 5 * s);
     const rows = this._workshopRows();
     dc.textAlign = "left"; dc.font = `${9 * s}px "Courier New",monospace`;
     if (!rows.length) {
       dc.textAlign = "center"; dc.fillStyle = "#7a98a6";
-      dc.fillText("No new blueprints to install.", w / 2, (bw.y + bw.h / 2) * s);
+      dc.fillText("All upgrades installed.", w / 2, (bw.y + bw.h / 2) * s);
     } else {
       for (const r of rows) {
-        const p = POI_BY_ID[r.id];
-        dc.fillStyle = "rgba(40,70,55,0.6)"; dc.fillRect(r.x * s, r.y * s, r.w * s, r.h * s);
-        dc.fillStyle = "#cfe8a0"; dc.fillText(p ? p.name : r.id, r.x * s + 4 * s, r.y * s + 2 * s);
+        const afford = this.xp.bank >= r.cost;
+        dc.fillStyle = afford ? "rgba(40,70,55,0.6)" : "rgba(40,40,45,0.5)";
+        dc.fillRect(r.x * s, r.y * s, r.w * s, r.h * s);
+        dc.fillStyle = afford ? "#cfe8a0" : "#5a6068";
+        dc.fillText(r.label, r.x * s + 4 * s, r.y * s + 2 * s);
+        dc.textAlign = "right"; dc.fillText(r.cost + " XP", (r.x + r.w) * s - 4 * s, r.y * s + 2 * s); dc.textAlign = "left";
       }
     }
     dc.textAlign = "center"; dc.fillStyle = "#678"; dc.font = `${8 * s}px "Courier New",monospace`;
-    dc.fillText("click an item to install it      ESC or click outside to close", w / 2, (bw.y + bw.h - 8) * s);
+    dc.fillText("click an affordable item to install it      ESC or click outside to close", w / 2, (bw.y + bw.h - 8) * s);
   }
 
   /* ---------- IMPLODE / ENDING render ---------- */
